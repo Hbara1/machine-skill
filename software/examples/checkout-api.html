@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkout API under load · Machine Skill</title>
+<meta name="description" content="A checkout service under peak load: a gateway, eight pods, Postgres and a payment provider, with p99 latency from queueing theory and the retry storm when the provider slows down. Built with the Machine Skill software module for Claude.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<!-- lab-kit:start -->
+<script type="module" src="../../kit/lab-kit.js"></script>
+<!-- lab-kit:end -->
+<!-- soft-kit:start -->
+<script type="module" src="../kit/soft-kit.js"></script>
+<!-- soft-kit:end -->
+<script type="module">
+const { THREE, Lab, MAT, GEO, clamp, fmt } = window.LabKit
+const SK = window.SoftKit
+
+/* ------------------------------------------------------------------ research
+"a checkout API on Black Friday: a gateway, eight pods, Postgres and a payment provider, and what happens when the provider slows down"
+
+The system (a representative design, not one company's numbers):
+  Gateway         4 workers, 0.8 ms per request (TLS terminated upstream)
+  Checkout        8 pods x 16 worker threads = 128 concurrent checkouts. A thread is held for the whole request:
+                  12 ms of CPU, 2 Postgres queries, and the payment call it waits on.
+  Postgres        20 pooled connections, 3 ms per query (index lookups and one insert)
+  Payment         external. Healthy latency lognormal, median 150 ms, sigma 0.5 (mean 170 ms, p99 480 ms).
+  Client policy   1 s timeout on the payment call, 3 immediate retries (no backoff, no jitter, no budget)
+  Gateway         10 s upstream timeout: a request that waits longer is answered 504
+
+Queueing (Erlang 1917, Kleinrock 1975; Allen-Cunneen for general service times):
+  a checkout pool is M/G/c with c = 128 and service time S from the call mix above
+  Wq(M/G/c) ~ Wq(M/M/c) x (1 + cs^2) / 2,  P(wait > t) = Pw exp(-(c mu - lambda) t)
+  Little's law L = lambda W gives the threads in use and the payment calls in flight
+  above capacity (rho >= 1) steady state does not exist: a fluid queue dN/dt = lambda - mu min(c, N) shows the backlog grow
+
+Hero: p99 checkout latency. Inputs: arrival rate and retries. Operating point: 300 checkouts/s, S = 188 ms, 44 % of threads busy, p99 about 500 ms.
+The break: the provider starts hanging 60 % of calls for 4 s. Each hang holds a thread for the full 1 s timeout, the retries
+send 2.2 times the calls, the pool's capacity falls from about 680 to 90 checkouts a second and the queue never drains.
+------------------------------------------------------------------ */
+
+// ------------------------------------------------------------------ model:start
+const SYS = {
+  gwC: 4, gwS: 0.0008,
+  pods: 8, threads: 16, cpu: 0.012,
+  dbConns: 20, dbS: 0.003, dbQ: 2,
+  payMed: 0.15, paySig: 0.5, hang: 4,
+  timeout: 1.0, gwTimeout: 10,
+}
+// a small seeded generator so every run of the page computes the same numbers
+const rng = (seed) => () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
+const gauss = (r) => Math.sqrt(-2 * Math.log(Math.max(1e-12, r()))) * Math.cos(2 * Math.PI * r())
+
+/** service time of one checkout thread: Monte Carlo over the payment calls and retries */
+function service(p, n = 20000) {
+  const r = rng(7), db = SYS.dbQ * SYS.dbS
+  const S = new Float64Array(n); let ok = 0, calls = 0
+  for (let i = 0; i < n; i++) {
+    let t = SYS.cpu + db, done = false
+    for (let k = 0; k <= p.retries && !done; k++) {
+      calls++
+      const hung = r() < p.slow
+      const lat = hung ? SYS.hang : SYS.payMed * Math.exp(SYS.paySig * gauss(r))
+      if (lat > SYS.timeout) t += SYS.timeout; else { t += lat; done = true }
+    }
+    if (done) ok++
+    S[i] = t
+  }
+  const mean = S.reduce((a, b) => a + b, 0) / n
+  const v = S.reduce((a, b) => a + (b - mean) ** 2, 0) / n
+  const sorted = Float64Array.from(S).sort()
+  return { mean, cs2: v / (mean * mean), p99: sorted[Math.floor(0.99 * n)], ok: ok / n, callsPer: calls / n }
+}
+
+/** the steady state at an arrival rate, or the overload when there is none */
+function steady(p) {
+  const s = service(p)
+  const c = SYS.pods * SYS.threads, mu = 1 / s.mean, cap = c * mu
+  const gw = SK.mmc(p.lambda, 1 / SYS.gwS, SYS.gwC)
+  const lamPool = Math.min(p.lambda, cap * 0.999)
+  const db = SK.mmc(lamPool * SYS.dbQ, 1 / SYS.dbS, SYS.dbConns)
+  const pool = SK.mmc(p.lambda, mu, c)
+  const k = (1 + s.cs2) / 2
+  const stable = pool.stable
+  const p99 = stable ? Math.min(SYS.gwTimeout, gw.W + pool.wq(0.99) * k + s.p99) : SYS.gwTimeout
+  const thr = Math.min(p.lambda, cap) * s.ok
+  return {
+    s, c, cap, stable, p99, thr,
+    busy: Math.min(1, p.lambda / cap),
+    fail: 1 - thr / Math.max(1e-9, p.lambda),
+    calls: Math.min(p.lambda, cap) * s.callsPer,          // calls per second the provider sees
+    amp: s.callsPer,
+    inflight: Math.min(p.lambda, cap) * (s.mean - SYS.cpu - SYS.dbQ * SYS.dbS),   // Little's law
+    dbBusy: db.rho, dbW: db.W, gwBusy: gw.rho,
+  }
+}
+// ------------------------------------------------------------------ model:end
+
+const params = { lambda: 300, retries: 3, slow: 0 }
+let R = steady(params)
+
+// ------------------------------------------------------------------ lab
+const lab = new Lab({
+  prompt: 'a checkout API on Black Friday, and what happens when the payment provider slows down',
+  no: 6, title: 'Checkout API', sub: 'under load',
+  theme: 'night', size: 1.25,
+  view: { az: 28, el: 30, dist: 2.0, target: [0.02, -0.06, 0.06], fov: 30 },
+  cut: { a: [0, 0, 1], b: [0, 0, 1], center: [0, 0, 0], reach: 0.6 },
+  pills: ['three.js', 'Queueing model', 'Trace', 'Film'],
+})
+
+// ------------------------------------------------------------------ the bench: a machined plinth the system sits on
+const PL = { w: 1.32, d: 0.56, h: 0.03 }
+lab.mesh(GEO.rbox(PL.w, PL.h, PL.d, 0.008), MAT.anodised({ color: [0.06, 0.065, 0.075] }), { name: 'Plinth', pos: [0, PL.h / 2, 0] })
+const Y0 = PL.h
+// engraved lane lines on the plinth face
+const grooves = []
+for (const z of [-0.2, 0.2]) grooves.push(GEO.rbox(PL.w * 0.94, 0.0012, 0.002, 0.0005).translate(0, Y0 + 0.0006, z))
+lab.mesh(GEO.merge(grooves), MAT.steelDark({ roughness: 0.5 }), { name: 'Plinth grooves' })
+
+// ------------------------------------------------------------------ the services
+const X = { inlet: -0.64, gw: -0.5, q: -0.33, pods0: -0.2, db: 0.34, pay: 0.52 }
+const gw = SK.module({ w: 0.14, h: 0.16, d: 0.18, name: 'GATEWAY', sub: '4 workers', leds: 4, color: [0.09, 0.095, 0.11] })
+gw.group.position.set(X.gw, Y0, 0); lab.add(gw.group, { name: 'Gateway', explode: [0, 0.12, 0], count: 1 })
+
+const queue = SK.column({ r: 0.034, h: 0.2, color: [0.36, 0.62, 1], name: 'Request queue' })
+queue.group.position.set(X.q, Y0, 0); lab.add(queue.group, { name: 'Request queue', explode: [0, 0.1, 0], count: 1 })
+
+const pods = []
+for (let i = 0; i < SYS.pods; i++) {
+  const row = i < 4 ? -1 : 1, col = i % 4
+  const m = SK.module({ w: 0.075, h: 0.12, d: 0.09, name: 'CHECKOUT', sub: `pod ${i + 1}`, leds: 8, color: [0.085, 0.09, 0.1] })
+  m.group.position.set(X.pods0 + col * 0.105, Y0, row * 0.1)
+  lab.add(m.group, { name: `Checkout pod ${i + 1}`, explode: [0, 0.08 + col * 0.02, row * 0.05], count: 1 })
+  pods.push(m)
+}
+
+const dbBase = SK.module({ w: 0.16, h: 0.05, d: 0.16, name: 'POSTGRES', sub: '20 connections', leds: 4, color: [0.07, 0.075, 0.09] })
+dbBase.group.position.set(X.db, Y0, -0.12); lab.add(dbBase.group, { name: 'Postgres', explode: [0, 0.06, -0.04], count: 1 })
+const disks = SK.platters({ r: 0.062, n: 5, t: 0.012, gap: 0.008 })
+disks.position.set(X.db, Y0 + 0.05, -0.12); lab.add(disks, { name: 'Postgres storage', explode: [0, 0.14, -0.04], count: 5 })
+
+const pay = SK.module({ w: 0.15, h: 0.18, d: 0.16, name: 'PAYMENTS', sub: 'external provider', leds: 6, color: [0.2, 0.17, 0.13], ledColor: [1, 0.72, 0.32] })
+pay.group.position.set(X.pay, Y0, 0.1); lab.add(pay.group, { name: 'Payment provider', explode: [0.08, 0.1, 0.04], count: 1 })
+const flight = SK.column({ r: 0.026, h: 0.16, color: [1, 0.68, 0.3], name: 'Calls in flight' })
+flight.group.position.set(X.pay - 0.15, Y0, 0.19); lab.add(flight.group, { name: 'Calls in flight', explode: [0, 0.08, 0.04], count: 1 })
+
+// ------------------------------------------------------------------ the conduits: glass pipes the requests ride in
+const pipeY = Y0 + 0.022, r = 0.0075
+const glassM = MAT.glass({ roughness: 0.05 })
+const routes = {
+  inlet: [[X.inlet, pipeY, 0], [X.gw - 0.07, pipeY, 0]],
+  gwq: [[X.gw + 0.07, pipeY, 0], [X.q - 0.034, pipeY, 0]],
+  header: [[X.q + 0.034, pipeY, 0], [X.pods0 + 3 * 0.105 + 0.05, pipeY, 0]],
+  db: [[X.pods0 + 3 * 0.105 + 0.05, pipeY, 0], [X.db - 0.02, pipeY, -0.03], [X.db, pipeY, -0.04]],
+  pay: [[X.pods0 + 3 * 0.105 + 0.05, pipeY, 0], [X.pay - 0.11, pipeY, 0.05], [X.pay - 0.075, pipeY, 0.1]],
+}
+const conduits = new THREE.Group()
+for (const pts of Object.values(routes)) conduits.add(new THREE.Mesh(GEO.pipe(pts, r, { seg: 48, radial: 18, tension: 0.2 }), glassM))
+// branch stubs from the header into every pod
+const stubs = []
+for (let i = 0; i < SYS.pods; i++) { const p = pods[i].group.position; stubs.push([[p.x, pipeY, 0], [p.x, pipeY, p.z - Math.sign(p.z) * 0.045]]) }
+for (const pts of stubs) conduits.add(new THREE.Mesh(GEO.pipe(pts, r * 0.8, { seg: 8, radial: 14 }), glassM))
+conduits.traverse((m) => { if (m.isMesh) m.userData.noAO = true })
+lab.add(conduits, { name: 'Conduits', explode: [0, 0.03, 0], count: Object.keys(routes).length + stubs.length })
+// pipe saddles: small machined clamps every 12 cm hold the glass to the plinth
+const sad = []
+for (let x = X.inlet + 0.04; x < X.pods0 + 0.36; x += 0.12) sad.push(GEO.rbox(0.012, 0.016, 0.026, 0.003).translate(x, Y0 + 0.008, 0))
+lab.mesh(GEO.merge(sad), MAT.aluminiumMachined(), { name: 'Pipe saddles', count: sad.length, explode: [0, 0.02, 0] })
+
+// ------------------------------------------------------------------ requests as packets
+const pk = new SK.Packets(lab, { size: 0.0052, max: 500 })
+const C = { req: [0.42, 0.68, 1], db: [0.3, 0.86, 0.74], pay: [1, 0.7, 0.3], bad: [0.95, 0.32, 0.18], ok: [0.55, 1, 0.65] }
+
+// ------------------------------------------------------------------ the trace panel: the system's vital signs over the last minute
+const trace = new SK.Trace(lab, {
+  title: 'Checkout service, last 60 s', window: 60,
+  lanes: [
+    { id: 'in', label: 'Arrivals', kind: 'analog', min: 0, max: 800, unit: '/s', digits: 0, color: C.req },
+    { id: 'done', label: 'Completed', kind: 'analog', min: 0, max: 800, unit: '/s', digits: 0, color: C.ok },
+    { id: 'p99', label: 'p99', kind: 'analog', min: 0, max: 10000, log: true, unit: 'ms', digits: 0, color: [0.95, 0.85, 0.4] },
+    { id: 'busy', label: 'Threads busy', kind: 'analog', min: 0, max: 100, unit: '%', digits: 0, color: [0.68, 0.52, 1] },
+    { id: 'calls', label: 'Provider calls', kind: 'analog', min: 0, max: 1600, unit: '/s', digits: 0, color: C.pay },
+    { id: 'queue', label: 'Backlog', kind: 'analog', min: 0, max: 6000, log: true, unit: '', digits: 0, color: [0.36, 0.62, 1] },
+  ],
+})
+
+// ------------------------------------------------------------------ the numbers on screen
+lab.hero({ label: 'p99 checkout', unit: 'ms', max: 3000, digits: 0 })
+const arr = lab.slider({ id: 'lambda', label: 'Arrivals', min: 20, max: 800, value: 300, step: 10, unit: 'checkouts/s', ends: ['20', '800'], onInput: () => retune() })
+const ret = lab.slider({ id: 'retries', label: 'Retries per payment call', min: 0, max: 5, value: 3, step: 1, ends: ['0', '5'], onInput: () => retune() })
+let tune = 0
+function retune() { clearTimeout(tune); tune = setTimeout(() => { params.lambda = arr.value; params.retries = ret.value; R = steady(params) }, 60) }
+
+// live: a fluid queue integrates the backlog so overload and recovery play out over seconds, not instantly
+const fq = new SK.FluidQueue()
+let now = 0, live = { p99: R.p99, thr: R.thr, fail: R.fail, backlog: 0 }
+function step(dt) {
+  const c = R.c, mu = 1 / R.s.mean
+  const capWait = c + SYS.gwTimeout * c * mu        // a request deeper than this waits past the gateway timeout
+  fq.cap = capWait
+  fq.step(dt, params.lambda, mu, c)
+  const waiting = Math.max(0, fq.N - c)
+  const waitNow = waiting / (c * mu)
+  const p99 = R.stable && waitNow < 0.05 ? R.p99 : Math.min(SYS.gwTimeout, waitNow + R.s.p99)
+  const thr = fq.served * R.s.ok
+  const fail = clamp(1 - thr / Math.max(1e-9, params.lambda), 0, 1)
+  live = { p99, thr, fail, backlog: waiting, busy: Math.min(fq.N, c) / c }
+}
+function show() {
+  const bad = live.fail > 0.02 || live.p99 > 2
+  lab.setHero(live.p99 * 1000, {
+    state: bad ? (live.p99 >= SYS.gwTimeout * 0.98 ? 'timing out' : 'falling behind') : live.busy > 0.85 ? 'near capacity' : 'healthy',
+    sub: bad
+      ? `<span class="bad">${fmt(live.fail * 100, 1)} % of checkouts failing</span> · ${fmt(live.thr)} done per second<br>provider sees ${fmt(R.calls)} calls/s, ${fmt(R.amp, 2)} per checkout · backlog ${fmt(live.backlog)}`
+      : `${fmt(live.thr)} checkouts/s · ${fmt(live.busy * 100)} % of 128 threads busy<br>capacity ${fmt(R.cap * R.s.ok)}/s · Postgres ${fmt(R.dbBusy * 100)} % · ${fmt(R.inflight)} payment calls in flight`,
+    bad,
+  })
+  trace.sub.textContent = `· M/G/128 with a fluid backlog · service ${fmt(R.s.mean * 1000)} ms mean, ${fmt(R.s.p99 * 1000)} ms p99`
+}
+
+// labels with live values
+lab.label(gw.group, 'Gateway', { at: [0, 0.16, 0], value: () => `${fmt(R.gwBusy * 100)} % busy · 10 s timeout` })
+lab.label(queue.group, 'Request queue', { at: [0, 0.2, 0], value: () => `${fmt(live.backlog)} waiting` })
+lab.label(pods[3].group, 'Checkout pods', { at: [0, 0.12, 0], value: () => `8 × 16 threads · ${fmt(live.busy * 100)} % busy` })
+lab.label(disks, 'Postgres', { at: [0, 0.1, 0], value: () => `${fmt(Math.min(params.lambda, R.cap) * SYS.dbQ)} queries/s · ${fmt(R.dbW * 1000, 1)} ms` })
+lab.label(pay.group, 'Payment provider', { at: [0, 0.18, 0], value: () => params.slow ? `${fmt(params.slow * 100)} % of calls hang · ${fmt(R.calls)}/s` : `p50 150 ms · ${fmt(R.calls)} calls/s` })
+lab.label(flight.group, 'Calls in flight', { at: [0, 0.16, 0], value: () => `${fmt(R.inflight)} (Little's law)` })
+
+// ------------------------------------------------------------------ the frame loop
+let acc = { req: 0, db: 0, pay: 0 }, tr = 0, heroAt = 0, spin = 0
+const VIS = 40   // at most this many dots a second per stream; each dot stands for many requests
+lab.onTick((sdt) => {
+  now += sdt; step(sdt)
+  if ((heroAt -= sdt) <= 0) { heroAt = 0.2; show() }
+  if ((tr -= sdt) <= 0) {
+    tr = 0.25
+    trace.sample('in', now, params.lambda); trace.sample('done', now, live.thr); trace.sample('p99', now, live.p99 * 1000)
+    trace.sample('busy', now, live.busy * 100); trace.sample('calls', now, R.calls); trace.sample('queue', now, live.backlog)
+  }
+  trace.now = now
+  // dots along the conduits at a rate that follows the solver
+  const rate = (x) => Math.min(VIS, x / 8)
+  acc.req += sdt * rate(params.lambda)
+  while (acc.req >= 1) { acc.req--; const toQueue = () => pk.send(routes.gwq, { dur: 0.35, color: C.req }); pk.send(routes.inlet, { dur: 0.5, color: C.req, onArrive: toQueue }) }
+  acc.db += sdt * rate(Math.min(params.lambda, R.cap) * SYS.dbQ / 2)
+  while (acc.db >= 1) { acc.db--; pk.send(routes.header, { dur: 0.45, color: C.req, onArrive: () => pk.send(routes.db, { dur: 0.3, color: C.db }) }) }
+  acc.pay += sdt * rate(R.calls)
+  while (acc.pay >= 1) {
+    acc.pay--
+    const fails = Math.random() < params.slow
+    pk.send(routes.pay, { dur: fails ? 1.4 : 0.4, color: fails ? C.bad : C.pay })
+  }
+  // the hardware shows the load
+  const busy = live.busy
+  pods.forEach((m, i) => m.leds.forEach((l, k) => { const on = (k + 0.5) / m.leds.length < busy; l.emissiveIntensity = on ? (live.fail > 0.02 ? 2.2 : 1.4) * (0.85 + 0.15 * Math.sin(now * 9 + i * 1.7 + k)) : 0.05; l.emissive.setRGB(...(live.fail > 0.02 ? C.bad : [0.25, 0.85, 0.55])) }))
+  gw.leds.forEach((l, k) => { l.emissiveIntensity = (k + 0.5) / gw.leds.length < R.gwBusy * 4 ? 1.2 : 0.08 })
+  dbBase.leds.forEach((l, k) => { l.emissiveIntensity = (k + 0.5) / dbBase.leds.length < R.dbBusy * 2 ? 1.2 : 0.08 })
+  pay.leds.forEach((l, k) => { l.emissiveIntensity = params.slow ? (Math.sin(now * 3 + k) > 0.3 ? 1.6 : 0.1) : 1.0 })
+  queue.set(Math.min(1, live.backlog / 4000) + (live.busy > 0.5 ? 0.02 : 0), live.fail > 0.02)
+  flight.set(Math.min(1, R.inflight / 160), params.slow > 0)
+  spin += sdt * (0.4 + R.dbBusy * 6); disks.rotation.y = spin
+})
+
+// ------------------------------------------------------------------ break it, explain it, film it
+lab.breakIt({
+  label: 'Slow the provider',
+  run(l) { params.slow = 0.6; R = steady(params); trace.mark(now, 'provider hangs 60 % of calls', { bad: true }) },
+  reset(l) { params.slow = 0; R = steady(params); trace.mark(now, 'provider recovers') },
+})
+lab.how(
+  'The checkout pool is a queue with 128 servers: each worker thread is held for the CPU work, two Postgres queries and the payment call it waits on, so the provider\'s latency is the pool\'s service time. That service time comes from 20,000 simulated checkouts with the retry policy applied; the p99 adds the M/G/c queueing delay (Erlang C with the Allen-Cunneen correction for the variability). Above capacity there is no steady state, so a fluid queue integrates the backlog second by second and the gateway answers 504 after 10 s. The latency figures and pool sizes are a representative design, not one company\'s. Break it makes the provider hang 60 % of calls: every hang holds a thread for the full 1 s timeout and the retries send 2.2 calls per checkout, so capacity collapses to about 90 checkouts a second. A 250 ms timeout, a retry budget with jittered backoff and a circuit breaker are the fixes.',
+  ['S = 12 ms + 2 × 3 ms + Σₖ pᵏ [(1 − p) L + p T₀]', 'capacity = c / S,   c = 8 × 16', 'Wq ≈ C(c, λS) / (c/S − λ) × (1 + cₛ²) / 2', 'calls per checkout = Σₖ₌₀ʳ pᵏ', 'dN/dt = λ − min(c, N) / S'],
+)
+lab.autoFilm({ runBeat: 'It runs on queueing theory.', runSub: 'Every thread, query and payment call, counted.', breakBeat: 'Slow one dependency.', breakSub: 'The retries finish what the provider started.', sliderTo: 0.42 })
+lab.start()
+show()
+</script>
+</body>
+</html>
