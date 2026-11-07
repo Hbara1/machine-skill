@@ -118,7 +118,7 @@ const lab = new Lab({
   prompt: 'a wearable ECG patch: an nRF52832 reading an ADS1292R over SPI, FreeRTOS, streaming over Bluetooth',
   no: 5, title: 'ECG patch', sub: 'the firmware, running',
   theme: 'night', size: 0.07,
-  view: { az: 24, el: 38, dist: 1.42, target: [0.001, 0.0045, 0.002], fov: 30 },
+  view: { az: 22, el: 34, dist: 2.1, target: [0, -0.004, 0.012], fov: 30 },
   cut: { a: [0, 0, 1], b: [0, 0, 1], center: [0, 0, 0.0004], reach: 0.6 },
   pills: ['three.js', 'FreeRTOS model', 'Trace', 'Film'],
 })
@@ -318,8 +318,10 @@ lab.label(x32m, '32 MHz crystal', { at: [0, 0.0005, 0], value: () => 'radio cloc
 lab.label(snaps.children[0], 'RA electrode', { at: [0, 0.002, 0], value: () => 'snap, 4 mm' })
 
 // ------------------------------------------------------------------ the frame loop
-let ecgT = 0, nextLossAt = 0.6
+let ecgT = 0, nextLossAt = 0.6, heroAt = 0
 lab.onTick((sdt) => {
+  // the building HUD writes over the hero during assembly; keep it ours
+  if ((heroAt -= sdt) <= 0) { heroAt = 0.25; show() }
   // the firmware, slowed
   const s = live.sim
   s.runUntil(s.now + sdt * SCALE); live.fw.os.sync()
