@@ -98,8 +98,9 @@ Pick a palette like an industrial designer: mostly metals and one or two painted
 
 Write a small pure function from the input and state to every number you show, with real units and real constants. Integrate dynamics with `approach` (first order lag: spool up, thermal mass) or `rk4` (springs, escapements, pendulums). Then drive the motion from it: an rpm from the solver turns the shaft, a flow from the solver moves the particles, a temperature heats the metal.
 
-- One hero: `lab.hero({ label, unit, max })` then `lab.setHero(value, { state, sub, bad })` each tick. `state` is two or three words (spooling up, take-off, choked flow). `sub` is one line with 2 or 3 more numbers.
+- One hero: `lab.hero({ label, unit, max })` then `lab.setHero(value, { state, sub, bad })` each tick. `state` is two or three words (spooling up, take-off, choked flow). `sub` holds 2 to 4 more numbers separated by ` · `; each becomes a small tile under the hero, so keep every item short ("44 % of 128 threads busy", not a sentence). `state` shows as a status chip, red when `bad`.
 - One slider: `lab.slider({ id, label, min, max, value, unit, ends })`. A second only if the machine truly needs it.
+- The page chrome is fixed by the kit: the prompt bar top left, one panel on the right (pills, title, hero, sliders, How it is computed) that sizes to its content and scrolls if it must, the toolbar bottom left. Don't restyle it per page. For an abstract machine with no meaningful real size (a service, a queue), pass `scale: false` to hide the scale bar.
 - Labels hang on static parts at points on the section planes: `lab.label(obj, 'HP turbine', { at: [x, y, z], value: () => '12,979 rpm' })`.
 - `lab.how(words, equations)` fills "How it is computed": the model in plain words and the equations as written in the code. Say what is simplified.
 - If a motion is too fast to see (a 2,700 rpm fan), show it slowed and say so in `how` ("spin shown 1:60"). Never slow the numbers.

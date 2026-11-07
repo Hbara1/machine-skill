@@ -532,80 +532,116 @@ function studioEnvironment(renderer, theme) {
 }
 
 const CSS = `
-:root { --paper:#f3f2ee; --ink:#141414; --mute:#8c8b87; --faint:#c9c7c1; --line:#e4e2dc; --accent:#e4572e; --panel:rgba(255,255,255,0.0);
-  --serif:'Instrument Serif','EB Garamond',Georgia,serif; --sans:'Inter',system-ui,-apple-system,sans-serif; --mono:'JetBrains Mono',ui-monospace,Menlo,monospace }
-.lab-night { --paper:#0d0e10; --ink:#f1efe9; --mute:#8e8c86; --faint:#4a4945; --line:#2a2a2a }
+:root { --paper:#f3f2ee; --ink:#141414; --mute:#7d7c77; --faint:#b9b7b0; --line:#e2e0da; --accent:#e4572e; --ok:#2f9e6b;
+  --panel:rgba(255,255,255,0.62); --edge:rgba(20,20,20,0.08); --well:rgba(20,20,20,0.045); --hover:rgba(20,20,20,0.06); --shadow:0 1px 2px rgba(0,0,0,0.04),0 8px 30px rgba(0,0,0,0.06);
+  --serif:'Instrument Serif','EB Garamond',Georgia,serif; --sans:'Inter',system-ui,-apple-system,sans-serif; --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --pad:clamp(16px,2.2vw,36px); --side:clamp(300px,24vw,400px); --fs:clamp(12px,0.84vw,14px); --r:12px }
+.lab-night { --paper:#0d0e10; --ink:#efede7; --mute:#8b8983; --faint:#55534f; --line:#2b2c2f; --ok:#4cc38a;
+  --panel:rgba(20,21,24,0.72); --edge:rgba(255,255,255,0.08); --well:rgba(255,255,255,0.045); --hover:rgba(255,255,255,0.07); --shadow:0 1px 0 rgba(255,255,255,0.03) inset,0 12px 40px rgba(0,0,0,0.35) }
 html,body { margin:0; height:100%; background:var(--paper); color:var(--ink); font-family:var(--sans); overflow:hidden; -webkit-font-smoothing:antialiased }
 #lab-gl { position:fixed; inset:0; width:100%; height:100%; display:block; outline:none; touch-action:none }
-.lab-ui { position:fixed; inset:0; pointer-events:none; z-index:2 }
+.lab-ui { position:fixed; inset:0; pointer-events:none; z-index:2; font-size:var(--fs) }
 .lab-ui * { box-sizing:border-box }
 .lab-ui .on { pointer-events:auto }
-.lab-prompt { position:absolute; left:4.2vw; top:4.2vh; max-width:58vw; padding:0.85em 1.2em; background:rgba(0,0,0,0.035); border-radius:3px; font-size:clamp(12px,1.02vw,19px); color:#55534f; line-height:1.35; letter-spacing:-0.005em }
-.lab-night .lab-prompt { background:rgba(255,255,255,0.05); color:#aaa79f }
-.lab-prompt b { color:var(--ink); font-weight:600 }
+.lab-card { background:var(--panel); border:1px solid var(--edge); border-radius:var(--r); box-shadow:var(--shadow); -webkit-backdrop-filter:blur(16px) saturate(1.2); backdrop-filter:blur(16px) saturate(1.2) }
+
+/* top left: the one line */
+.lab-prompt { position:absolute; left:var(--pad); top:var(--pad); max-width:calc(100vw - var(--side) - 3 * var(--pad)); padding:0.72em 1em; font-size:calc(var(--fs) * 1.08); color:var(--mute); line-height:1.4; letter-spacing:-0.005em }
+.lab-prompt b { font-family:var(--mono); font-size:0.9em; color:var(--ink); font-weight:500; margin-right:0.35em }
+.lab-prompt .txt { color:var(--ink); opacity:0.86 }
 .lab-prompt .caret { display:inline-block; width:0.08em; height:1.05em; background:var(--ink); vertical-align:-0.18em; margin-left:1px; animation:labblink 1s steps(1) infinite }
 @keyframes labblink { 50% { opacity:0 } }
-.lab-pills { position:absolute; right:4.2vw; top:5.4vh; display:flex; gap:1.4em; font-size:clamp(11px,0.95vw,18px); color:var(--ink) }
-.lab-pills span::before { content:''; display:inline-block; width:0.5em; height:0.5em; border-radius:50%; background:var(--ink); margin-right:0.45em; vertical-align:0.08em }
-.lab-pills span.off { color:var(--faint) } .lab-pills span.off::before { background:none; box-shadow:inset 0 0 0 1px var(--faint) }
-.lab-side { position:absolute; right:4.2vw; top:50%; transform:translateY(-50%); width:clamp(250px,22.5vw,440px) }
-.lab-no { font-size:clamp(11px,0.95vw,18px); color:var(--mute); margin-bottom:0.3em }
-.lab-title { font-family:var(--serif); font-size:clamp(34px,3.9vw,76px); line-height:0.98; letter-spacing:-0.01em; font-weight:400 }
-.lab-title i { display:block; color:#6d6b66; font-style:italic }
-.lab-night .lab-title i { color:#a4a199 }
-.lab-metric { margin-top:clamp(18px,3.6vh,44px) }
-.lab-metric .lbl { font-size:clamp(12px,1.02vw,19px); color:var(--mute) } .lab-metric .lbl b { color:var(--ink); font-weight:500 }
-.lab-big { font-family:var(--serif); font-size:clamp(64px,7.4vw,142px); line-height:1.02; letter-spacing:-0.02em; font-variant-numeric:lining-nums tabular-nums; white-space:nowrap }
-.lab-big i { font-size:0.4em; color:#7a7873; margin-left:0.12em; letter-spacing:0 }
-.lab-bar { position:relative; height:clamp(4px,0.42vh,7px); background:var(--line); margin:0.2em 0 0.9em }
-.lab-bar > div { position:absolute; left:0; top:0; bottom:0; background:var(--ink); transition:none }
+
+/* right: one panel that never overlaps itself */
+.lab-side { position:absolute; right:var(--pad); top:var(--pad); max-height:calc(100% - 2 * var(--pad)); width:var(--side); display:flex; flex-direction:column; padding:1.5em 1.5em 0; overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; scrollbar-color:var(--line) transparent }
+.lab-side::-webkit-scrollbar { width:6px } .lab-side::-webkit-scrollbar-thumb { background:var(--line); border-radius:3px }
+.lab-pills { display:flex; flex-wrap:wrap; gap:0.4em; margin-bottom:1.4em }
+.lab-pills span { font-size:0.82em; color:var(--mute); padding:0.28em 0.7em 0.28em 0.62em; border:1px solid var(--edge); border-radius:999px; white-space:nowrap }
+.lab-pills span::before { content:''; display:inline-block; width:0.45em; height:0.45em; border-radius:50%; background:var(--ok); margin-right:0.45em; vertical-align:0.1em }
+.lab-pills span.off::before { background:none; box-shadow:inset 0 0 0 1px var(--faint) }
+.lab-no { font-family:var(--mono); font-size:0.8em; letter-spacing:0.08em; text-transform:uppercase; color:var(--mute); margin-bottom:0.5em }
+.lab-title { font-family:var(--serif); font-size:clamp(30px,2.5vw,46px); line-height:1; letter-spacing:-0.01em; font-weight:400 }
+.lab-title i { display:block; color:var(--mute); font-style:italic }
+.lab-metric { margin-top:1.4em; padding-top:1.3em; border-top:1px solid var(--edge) }
+.lab-metric .lbl { display:flex; align-items:center; justify-content:space-between; gap:1em; color:var(--mute) }
+.lab-metric .st { font-size:0.82em; font-weight:500; color:var(--ok); padding:0.2em 0.65em; border-radius:999px; background:color-mix(in srgb, var(--ok) 14%, transparent); white-space:nowrap }
+.lab-metric .st:empty { display:none }
+.lab-metric .st.bad { color:var(--accent); background:color-mix(in srgb, var(--accent) 16%, transparent) }
+.lab-big { font-family:var(--serif); font-size:clamp(52px,4.6vw,88px); line-height:1.05; letter-spacing:-0.02em; font-variant-numeric:lining-nums tabular-nums; white-space:nowrap; margin-top:0.08em }
+.lab-big i { font-size:0.38em; color:var(--mute); margin-left:0.14em; letter-spacing:0 }
+.lab-bar { position:relative; height:3px; border-radius:2px; background:var(--line); margin:0.5em 0 1em; overflow:hidden }
+.lab-bar > div { position:absolute; left:0; top:0; bottom:0; border-radius:2px; background:var(--ink); transition:none }
 .lab-bar.bad > div { background:var(--accent) }
-.lab-sub { font-size:clamp(12px,1.02vw,19px); color:#4d4b47; font-variant-numeric:tabular-nums; line-height:1.5 }
-.lab-night .lab-sub { color:#bdbab2 }
+.lab-sub { display:flex; flex-wrap:wrap; gap:0.4em; font-variant-numeric:tabular-nums; line-height:1.35; color:var(--ink) }
+.lab-sub > span { padding:0.32em 0.6em; border-radius:6px; background:var(--well); font-size:0.92em }
 .lab-sub .bad { color:var(--accent) }
-.lab-ctl { margin-top:clamp(16px,3.2vh,40px) }
-.lab-ctl .row { display:flex; justify-content:space-between; font-size:clamp(12px,1.02vw,19px); color:var(--mute); margin-bottom:0.55em } .lab-ctl .row b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums }
-.lab-ctl input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:2.6em; background:transparent; margin:0; cursor:pointer }
-.lab-ctl input[type=range]::-webkit-slider-runnable-track { height:0.62em; background:linear-gradient(to right,var(--ink) 0 var(--p,0%),var(--line) var(--p,0%) 100%); border-radius:0.31em }
-.lab-ctl input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:2.3em; height:2.3em; border-radius:50%; background:#fff; margin-top:-0.84em; box-shadow:0 1px 2px rgba(0,0,0,0.18),0 4px 14px rgba(0,0,0,0.12),inset 0 0 0 1px rgba(0,0,0,0.06) }
-.lab-ctl input[type=range]::-moz-range-track { height:0.62em; background:var(--line); border-radius:0.31em } .lab-ctl input[type=range]::-moz-range-progress { height:0.62em; background:var(--ink); border-radius:0.31em }
-.lab-ctl input[type=range]::-moz-range-thumb { width:2.3em; height:2.3em; border-radius:50%; background:#fff; border:none; box-shadow:0 1px 2px rgba(0,0,0,0.18),0 4px 14px rgba(0,0,0,0.12) }
-.lab-ctl .ends { display:flex; justify-content:space-between; font-size:clamp(11px,0.9vw,17px); color:var(--faint); margin-top:0.1em }
-.lab-modes { position:absolute; left:4.2vw; bottom:4.2vh; display:flex; gap:0.5em; flex-wrap:wrap; font-size:clamp(11px,0.88vw,16px) }
-.lab-modes button { font:inherit; color:var(--ink); background:transparent; border:1px solid var(--line); border-radius:999px; padding:0.5em 1.05em; cursor:pointer; transition:background .2s, color .2s, border-color .2s }
-.lab-modes button:hover { border-color:var(--faint) }
-.lab-modes button.act { background:var(--ink); color:var(--paper); border-color:var(--ink) }
-.lab-modes button.brk { color:var(--accent); border-color:rgba(228,87,46,0.35) } .lab-modes button.brk.act { background:var(--accent); color:#fff; border-color:var(--accent) }
-.lab-modes kbd { font:inherit; color:var(--faint); margin-left:0.45em; font-size:0.85em }
-.lab-modes button.act kbd { color:rgba(255,255,255,0.45) }
-.lab-how { position:absolute; right:4.2vw; bottom:4.2vh; width:clamp(250px,22.5vw,440px); font-size:clamp(11px,0.82vw,15px); color:var(--mute); line-height:1.5 }
-.lab-how summary { cursor:pointer; color:var(--ink); list-style:none; font-weight:500 } .lab-how summary::-webkit-details-marker { display:none } .lab-how summary::after { content:' +'; color:var(--faint) }
-.lab-how[open] summary::after { content:' \\2212' }
-.lab-how .eq { font-family:var(--mono); font-size:0.92em; color:#4d4b47; margin:0.5em 0; white-space:pre-wrap }
-.lab-night .lab-how .eq { color:#bdbab2 }
-.lab-scale { position:absolute; left:4.2vw; bottom:calc(4.2vh + 3.4em); font-size:clamp(10px,0.8vw,14px); color:var(--mute); font-variant-numeric:tabular-nums }
+.lab-ctls { margin-top:0.4em }
+.lab-ctl { margin-top:1.3em; padding-top:1.2em; border-top:1px solid var(--edge) }
+.lab-ctl + .lab-ctl { border-top:none; padding-top:0; margin-top:1.1em }
+.lab-ctl .row { display:flex; justify-content:space-between; align-items:baseline; gap:1em; color:var(--mute); margin-bottom:0.35em }
+.lab-ctl .row b { font-family:var(--mono); font-size:0.95em; color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums; white-space:nowrap }
+.lab-ctl input[type=range] { -webkit-appearance:none; appearance:none; display:block; width:100%; height:22px; background:transparent; margin:0; cursor:pointer; --thumb:16px }
+.lab-ctl input[type=range]:focus { outline:none }
+.lab-ctl input[type=range]::-webkit-slider-runnable-track { height:4px; background:linear-gradient(to right,var(--ink) 0 var(--p,0%),var(--line) var(--p,0%) 100%); border-radius:2px }
+.lab-ctl input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:var(--thumb); height:var(--thumb); border-radius:50%; background:var(--ink); margin-top:-6px; box-shadow:0 0 0 4px var(--paper),0 1px 6px rgba(0,0,0,0.3); transition:transform .12s }
+.lab-ctl input[type=range]:hover::-webkit-slider-thumb { transform:scale(1.12) }
+.lab-ctl input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow:0 0 0 4px var(--paper),0 0 0 6px color-mix(in srgb, var(--ink) 35%, transparent) }
+.lab-ctl input[type=range]::-moz-range-track { height:4px; background:var(--line); border-radius:2px } .lab-ctl input[type=range]::-moz-range-progress { height:4px; background:var(--ink); border-radius:2px }
+.lab-ctl input[type=range]::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:var(--ink); border:none; box-shadow:0 0 0 4px var(--paper),0 1px 6px rgba(0,0,0,0.3) }
+.lab-ctl .ends { display:flex; justify-content:space-between; font-size:0.84em; color:var(--faint); margin-top:0.2em; font-variant-numeric:tabular-nums }
+.lab-how { margin:1.5em -1.5em 0; padding:0.9em 1.5em 1.1em; border-top:1px solid var(--edge); color:var(--mute); line-height:1.55; font-size:0.94em }
+.lab-how summary { cursor:pointer; color:var(--ink); list-style:none; font-weight:500; display:flex; justify-content:space-between; align-items:center }
+.lab-how summary::-webkit-details-marker { display:none }
+.lab-how summary::after { content:''; width:0.45em; height:0.45em; border-right:1.5px solid var(--mute); border-bottom:1.5px solid var(--mute); transform:rotate(45deg) translate(-0.1em,-0.1em); transition:transform .2s }
+.lab-how[open] summary::after { transform:rotate(-135deg) translate(-0.1em,-0.1em) }
+.lab-how .body { margin-top:0.7em }
+.lab-how .eq { font-family:var(--mono); font-size:0.9em; color:var(--ink); opacity:0.8; margin:0.5em 0; padding:0.6em 0.75em; background:var(--well); border-radius:6px; white-space:pre-wrap }
+
+/* bottom left: the toolbar */
+.lab-modes { position:absolute; left:var(--pad); bottom:var(--pad); display:flex; align-items:center; gap:2px; padding:4px; max-width:calc(100vw - var(--side) - 3 * var(--pad)); overflow-x:auto; scrollbar-width:none }
+.lab-modes::-webkit-scrollbar { display:none }
+.lab-modes button { font:inherit; font-size:0.96em; color:var(--mute); background:transparent; border:0; border-radius:8px; padding:0.55em 0.85em; cursor:pointer; white-space:nowrap; display:inline-flex; align-items:center; gap:0.5em; transition:background .15s, color .15s }
+.lab-modes button:hover { color:var(--ink); background:var(--hover) }
+.lab-modes button:focus-visible { outline:2px solid color-mix(in srgb, var(--ink) 40%, transparent); outline-offset:-2px }
+.lab-modes button.act { color:var(--ink); background:var(--hover); box-shadow:inset 0 0 0 1px var(--edge) }
+.lab-modes button.act::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--ok) }
+.lab-modes .sep { width:1px; align-self:stretch; margin:6px 4px; background:var(--edge); flex:none }
+.lab-modes button.brk { color:var(--accent) }
+.lab-modes button.brk:hover { background:color-mix(in srgb, var(--accent) 12%, transparent) }
+.lab-modes button.brk.act { color:#fff; background:var(--accent); box-shadow:none } .lab-modes button.brk.act::before { background:#fff }
+.lab-modes kbd { font-family:var(--mono); font-size:0.78em; line-height:1; color:var(--faint); padding:0.25em 0.4em; border:1px solid var(--edge); border-radius:4px; min-width:1.6em; text-align:center }
+.lab-modes button.brk.act kbd { color:rgba(255,255,255,0.75); border-color:rgba(255,255,255,0.35) }
+
+.lab-scale { position:absolute; left:var(--pad); bottom:calc(var(--pad) + 3.9em); font-family:var(--mono); font-size:0.82em; color:var(--mute); font-variant-numeric:tabular-nums }
 .lab-scale div { height:1px; background:var(--mute); margin-top:0.35em; position:relative } .lab-scale div::before,.lab-scale div::after { content:''; position:absolute; top:-3px; width:1px; height:7px; background:var(--mute) } .lab-scale div::after { right:0 }
 .lab-labels { position:absolute; inset:0 } .lab-labels svg { position:absolute; inset:0; width:100%; height:100% }
-.lab-lab { position:absolute; font-size:clamp(11px,0.86vw,16px); color:var(--ink); white-space:nowrap; transform:translate(0,-50%); transition:opacity .35s; line-height:1.25; text-shadow:0 0 3px var(--paper), 0 0 8px var(--paper), 0 0 14px var(--paper) }
+.lab-lab { position:absolute; font-size:clamp(11px,0.86vw,15px); color:var(--ink); white-space:nowrap; transform:translate(0,-50%); transition:opacity .35s; line-height:1.25; text-shadow:0 0 3px var(--paper), 0 0 8px var(--paper), 0 0 14px var(--paper) }
 .lab-lab small { display:block; color:var(--mute); font-size:0.86em; font-variant-numeric:tabular-nums }
 .lab-lab.left { transform:translate(-100%,-50%); text-align:right }
-.lab-beat { position:absolute; left:4.2vw; bottom:4.6vh; display:flex; align-items:center; gap:0.85em; font-size:clamp(16px,1.9vw,36px); letter-spacing:-0.01em; opacity:0; transition:none }
-.lab-beat .n { font-size:0.5em; border:1px solid var(--faint); color:var(--mute); padding:0.42em 0.62em; line-height:1; font-variant-numeric:tabular-nums }
+.lab-beat { position:absolute; left:var(--pad); bottom:calc(var(--pad) + 0.4em); display:flex; align-items:center; gap:0.85em; font-size:clamp(16px,1.9vw,36px); letter-spacing:-0.01em; opacity:0; transition:none }
+.lab-beat .n { font-family:var(--mono); font-size:0.42em; border:1px solid var(--faint); border-radius:4px; color:var(--mute); padding:0.42em 0.62em; line-height:1; font-variant-numeric:tabular-nums }
 .lab-beat b { font-weight:500 } .lab-beat span { color:var(--mute) }
 .lab-cursor { position:absolute; left:0; top:0; width:clamp(18px,1.45vw,28px); opacity:0; filter:drop-shadow(0 2px 3px rgba(0,0,0,0.25)); transform-origin:2px 2px }
 .lab-flash { position:absolute; inset:0; background:var(--accent); opacity:0; mix-blend-mode:multiply }
-.lab-brand { position:absolute; right:4.2vw; bottom:4.2vh; font-size:clamp(10px,0.78vw,14px); color:var(--faint) }
+.lab-brand { position:absolute; right:var(--pad); bottom:var(--pad); font-size:0.9em; color:var(--faint) }
 .lab-film .lab-how, .lab-film .lab-scale { display:none }
-.lab-film .lab-modes button:not([data-k=break]) { display:none }
-.lab-film:not(.lab-embed) .lab-modes { left:auto; right:4.2vw }
+.lab-film .lab-modes button:not([data-k=break]), .lab-film .lab-modes .sep { display:none }
+.lab-film:not(.lab-embed) .lab-modes { left:auto; right:calc(var(--side) + 2 * var(--pad)) }
 .lab-embed .lab-beat { display:none }
 .lab-hidden { opacity:0 !important }
+@media (max-height: 760px) and (min-width: 761px) {
+  .lab-side { padding-top:1.1em } .lab-pills { margin-bottom:0.9em } .lab-metric { margin-top:1em; padding-top:1em } .lab-big { font-size:clamp(44px,4vw,72px) }
+}
 @media (max-width: 760px) {
-  .lab-side { top:auto; bottom:12vh; transform:none; right:16px; left:16px; width:auto }
-  .lab-prompt { left:16px; right:16px; max-width:none; top:16px }
-  .lab-pills, .lab-how, .lab-scale { display:none }
-  .lab-modes { left:16px; right:16px; bottom:16px }
-  .lab-big { font-size:56px }
+  :root { --pad:12px; --fs:13px }
+  .lab-prompt { left:var(--pad); right:var(--pad); max-width:none; font-size:12.5px; padding:0.6em 0.85em }
+  .lab-side { top:auto; left:var(--pad); right:var(--pad); width:auto; bottom:calc(var(--pad) + 52px); max-height:44vh; padding:1em 1.1em 0 }
+  .lab-pills, .lab-scale, .lab-no { display:none }
+  .lab-title { font-size:26px } .lab-title i { display:inline; margin-left:0.25em }
+  .lab-metric { margin-top:0.8em; padding-top:0.8em }
+  .lab-big { font-size:48px }
+  .lab-how { margin-left:-1.1em; margin-right:-1.1em; padding-left:1.1em; padding-right:1.1em }
+  .lab-modes { left:var(--pad); right:var(--pad); bottom:var(--pad); max-width:none }
 }
 `
 
@@ -623,6 +659,7 @@ const CURSOR_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
  *   frame: 'left' | 'center',               // where the subject sits (left leaves room for the side column)
  *   ground: 0,                              // y (metres, machine frame) of the floor
  *   pills: ['three.js', 'Physics', 'Film'],
+ *   scale: false,                           // hide the scale bar (abstract machines: services, queues)
  * })
  */
 export class Lab {
@@ -666,17 +703,17 @@ export class Lab {
     const ui = document.createElement('div'); ui.className = 'lab-ui'
     ui.innerHTML = `
       <div class="lab-labels"><svg></svg></div>
-      <div class="lab-prompt"><b>/machine</b> <span class="txt"></span><span class="caret" style="display:none"></span></div>
-      <div class="lab-pills">${(o.pills ?? ['three.js', 'Physics', 'Film']).map((p) => `<span>${p}</span>`).join('')}</div>
-      <div class="lab-side">
+      <div class="lab-prompt lab-card"><b>/machine</b><span class="txt"></span><span class="caret" style="display:none"></span></div>
+      <div class="lab-side lab-card on">
+        <div class="lab-pills">${(o.pills ?? ['three.js', 'Physics', 'Film']).map((p) => `<span>${p}</span>`).join('')}</div>
         <div class="lab-no">No. ${String(o.no ?? 1).padStart(2, '0')}</div>
         <div class="lab-title">${o.title ?? 'Machine'}<i>${o.sub ?? ''}</i></div>
         <div class="lab-metric"></div>
         <div class="lab-ctls"></div>
+        <details class="lab-how"><summary>How it is computed</summary><div class="body"></div></details>
       </div>
       <div class="lab-scale"><span></span><div></div></div>
-      <div class="lab-modes on"></div>
-      <details class="lab-how on"><summary>How it is computed</summary><div class="body"></div></details>
+      <div class="lab-modes lab-card on"></div>
       <div class="lab-beat"><span class="n"></span><div><b></b> <span></span></div></div>
       <div class="lab-flash"></div>
       <div class="lab-cursor">${CURSOR_SVG}</div>`
@@ -686,6 +723,7 @@ export class Lab {
     this.$('.lab-prompt .txt').textContent = o.prompt ?? ''
     if (this.embed && !this.filmMode) for (const s of ['.lab-modes', '.lab-how', '.lab-scale']) this.$(s).style.display = 'none'
     if (o.frame === 'center') this.$('.lab-side').style.display = 'none'
+    if (o.scale === false) this.$('.lab-scale').style.display = 'none'
     // the primary metric block
     this.metricEl = this.$('.lab-metric')
   }
@@ -696,7 +734,7 @@ export class Lab {
    */
   hero(o) {
     this.heroO = { digits: 0, ...o }
-    this.metricEl.innerHTML = `<div class="lbl">${o.label} · <b class="st"></b></div><div class="lab-big"><span class="v">0</span><i>${o.unit ?? ''}</i></div><div class="lab-bar"><div></div></div><div class="lab-sub"></div>`
+    this.metricEl.innerHTML = `<div class="lbl"><span>${o.label}</span><b class="st"></b></div><div class="lab-big"><span class="v">0</span><i>${o.unit ?? ''}</i></div><div class="lab-bar"><div></div></div><div class="lab-sub"></div>`
     this._hv = this.metricEl.querySelector('.v'); this._hs = this.metricEl.querySelector('.st'); this._hb = this.metricEl.querySelector('.lab-bar'); this._hsub = this.metricEl.querySelector('.lab-sub')
   }
   setHero(v, { state, sub, bad = false } = {}) {
@@ -705,7 +743,8 @@ export class Lab {
     this.heroValue = v
     this._hv.textContent = fmt(v, h.digits)
     if (state !== undefined) this._hs.textContent = state
-    if (sub !== undefined) this._hsub.innerHTML = sub
+    this._hs.classList.toggle('bad', bad)
+    if (sub !== undefined) this._hsub.innerHTML = String(sub).split(/\s+·\s+|<br\s*\/?>/).filter((x) => x.trim()).map((x) => `<span>${x}</span>`).join('')
     this._hb.firstElementChild.style.width = `${clamp(v / h.max) * 100}%`
     this._hb.classList.toggle('bad', bad)
   }
@@ -735,7 +774,7 @@ export class Lab {
     const m = this.$('.lab-modes')
     const defs = [['run', 'Pause', 'Space'], ['explode', 'Explode', 'E'], ['cut', 'Cut away', 'C'], ['xray', 'X-ray', 'X'], ['slow', 'Slow', 'S'], ['labels', 'Labels', 'L']]
     if (this._break) defs.push(['break', this._break.label ?? 'Break it', 'B'])
-    m.innerHTML = defs.map(([k, t, key]) => `<button data-k="${k}" class="${k === 'break' ? 'brk' : ''}">${t}<kbd>${key}</kbd></button>`).join('')
+    m.innerHTML = defs.map(([k, t, key]) => `${k === 'break' ? '<span class="sep"></span>' : ''}<button data-k="${k}" class="${k === 'break' ? 'brk' : ''}" title="${t} (${key})">${t}<kbd>${key}</kbd></button>`).join('')
     m.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) this.toggle(b.dataset.k) })
     addEventListener('keydown', (e) => {
       if (e.target.tagName === 'INPUT' && e.key !== ' ') return
@@ -969,7 +1008,7 @@ export class Lab {
       for (const p of this.parts) { const ai = ease.out(clamp((1 - A) * 1.6 - (p.order / Math.max(1, this.parts.length)) * 0.6)); const c = p.count ?? 1; if (ai > 0.92) { n += p._c ?? (p._c = p.count ?? (() => { let k = 0; p.obj.traverse((m) => { if (m.isMesh && m.layers.mask & 1) k++ }); return Math.max(1, k) })()); cur = p.name || cur } void c }
       if (!this._building) { this._building = true; this._saveHero = this.metricEl.innerHTML }
       this._hs.textContent = cur
-      this.metricEl.querySelector('.lbl').firstChild.textContent = 'Building · '
+      this.metricEl.querySelector('.lbl').firstChild.textContent = 'Building'
       this._hv.textContent = fmt(n)
       this.metricEl.querySelector('.lab-big i').textContent = `of ${fmt(N)} parts`
       this._hb.firstElementChild.style.width = `${(n / N) * 100}%`
@@ -977,7 +1016,7 @@ export class Lab {
       this._hsub.textContent = `${fmt(this.tris ?? 0)} triangles · ${this.matCount ?? 0} materials`
     } else if (this._building) {
       this._building = false
-      this.metricEl.querySelector('.lbl').firstChild.textContent = `${this.heroO.label} · `
+      this.metricEl.querySelector('.lbl').firstChild.textContent = this.heroO.label
       this.metricEl.querySelector('.lab-big i').textContent = this.heroO.unit ?? ''
       if (this._heroPending) this.setHero(...this._heroPending)
     }
@@ -1234,7 +1273,7 @@ export class Lab {
   _cursorPos(spec) {
     if (Array.isArray(spec)) return { x: spec[0] * innerWidth, y: spec[1] * innerHeight }
     const [kind, id, frac] = spec.split(':')
-    if (kind === 'slider') { const r = this.controls[id].el.getBoundingClientRect(); const f = Number(frac ?? 0.5); const th = r.height * 0.88; return { x: r.left + th / 2 + (r.width - th) * f + 2, y: r.top + r.height / 2 + 4 } }
+    if (kind === 'slider') { const r = this.controls[id].el.getBoundingClientRect(); const f = Number(frac ?? 0.5); const th = 16; return { x: r.left + th / 2 + (r.width - th) * f + 2, y: r.top + r.height / 2 + 4 } }
     if (kind === 'button') { const b = this.ui.querySelector(`.lab-modes button[data-k="${id}"]`); const r = b.getBoundingClientRect(); return { x: r.left + r.width * 0.55, y: r.top + r.height * 0.6 } }
     if (kind === 'part') { const p = this.parts.find((q) => q.name === id); const w = new THREE.Vector3().setFromMatrixPosition(p.obj.matrixWorld).project(this.camera); return { x: (w.x * 0.5 + 0.5) * innerWidth, y: (-w.y * 0.5 + 0.5) * innerHeight } }
     return { x: innerWidth / 2, y: innerHeight / 2 }

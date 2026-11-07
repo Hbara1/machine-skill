@@ -688,12 +688,15 @@ export class Waves {
 // ================================================================ the trace panel
 
 const TRACE_CSS = `
-.sk-trace { position:absolute; left:4.2vw; bottom:calc(4.2vh + 6.2em); width:min(60vw, calc(100vw - 4.2vw - clamp(250px,22.5vw,440px) - 8vw)); font-family:var(--mono); color:var(--mute); pointer-events:none; transition:opacity .35s }
+.sk-trace { position:absolute; left:var(--pad); bottom:calc(var(--pad) + 3.5em + 10px); width:min(1000px, calc(100vw - var(--side) - 3 * var(--pad))); padding:0.85em 1.1em 0.7em; color:var(--mute); pointer-events:none; transition:opacity .35s }
 .sk-trace canvas { display:block; width:100%; }
-.sk-trace .hd { display:flex; justify-content:space-between; font-size:clamp(10px,0.74vw,13px); margin-bottom:0.45em; letter-spacing:0.02em }
-.sk-trace .hd b { color:var(--ink); font-weight:500 }
-.lab-film .sk-trace { bottom:calc(4.2vh + 4.6em) }
-@media (max-width: 760px) { .sk-trace { left:16px; right:16px; width:auto; bottom:calc(12vh + 15em) } }
+.sk-trace .hd { display:flex; justify-content:space-between; align-items:baseline; gap:1.5em; margin-bottom:0.65em; white-space:nowrap; overflow:hidden }
+.sk-trace .hd > span:first-child { overflow:hidden; text-overflow:ellipsis }
+.sk-trace .hd b { color:var(--ink); font-weight:500; margin-right:0.6em }
+.sk-trace .hd .sub, .sk-trace .hd .rt { font-family:var(--mono); font-size:0.86em }
+.lab-has-trace .lab-scale { bottom:auto; top:calc(var(--pad) + 4.6em) }
+.lab-film .sk-trace { bottom:calc(var(--pad) + 4.6em) }
+@media (max-width: 760px) { .sk-trace { left:var(--pad); right:var(--pad); width:auto; bottom:auto; top:calc(var(--pad) + 58px); padding:0.7em 0.8em 0.5em } }
 `
 
 /**
@@ -711,9 +714,10 @@ export class Trace {
     this.win = o.window ?? 0.05
     this.lanes = o.lanes.map((l) => ({ label: l.id, kind: 'task', ...l, segs: [], pts: [] }))
     this.byId = Object.fromEntries(this.lanes.map((l) => [l.id, l]))
-    this.marks = []; this.now = 0; this.on = o.on ?? 1; this.alpha = this.on
+    this.marks = []; this.now = 0; this.on = o.on ?? (typeof innerWidth !== 'undefined' && innerWidth <= 760 && !new URLSearchParams(location.search).has('film') ? 0 : 1); this.alpha = this.on
     const st = document.createElement('style'); st.textContent = TRACE_CSS; document.head.appendChild(st)
-    const el = document.createElement('div'); el.className = 'sk-trace'
+    document.documentElement.classList.add('lab-has-trace')
+    const el = document.createElement('div'); el.className = 'sk-trace lab-card'
     el.innerHTML = `<div class="hd"><span><b>${o.title ?? 'Trace'}</b> <span class="sub"></span></span><span class="rt"></span></div><canvas></canvas>`
     lab.ui.appendChild(el); this.el = el; this.cv = el.querySelector('canvas'); this.sub = el.querySelector('.sub'); this.rt = el.querySelector('.rt')
     this.rowH = o.rowH ?? 20
@@ -723,7 +727,7 @@ export class Trace {
     lab._modes = () => {
       orig()
       const m = lab.$('.lab-modes'), b = document.createElement('button'); b.dataset.k = 'trace'; b.innerHTML = 'Trace<kbd>T</kbd>'
-      const brk = m.querySelector('[data-k=break]'); m.insertBefore(b, brk)
+      const brk = m.querySelector('.sep') ?? m.querySelector('[data-k=break]'); m.insertBefore(b, brk)
       addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 't' && e.target.tagName !== 'INPUT') { e.preventDefault(); lab.toggle('trace') } })
     }
     lab.onTick((sdt, l, dt) => this.draw(dt))
@@ -746,13 +750,15 @@ export class Trace {
     const g = this.cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, cw, H)
     const night = lab.theme !== 'paper'
     const ink = night ? '241,239,233' : '20,20,20', mute = night ? '142,140,134' : '140,139,135'
-    const t1 = this.now, t0 = t1 - this.win, x0 = lab0, x1 = cw
+    const gut = this.lanes.some((L) => L.unit) ? Math.round(fs * 6.4) : 0
+    const t1 = this.now, t0 = t1 - this.win, x0 = lab0, x1 = cw - gut
     const X = (t) => x0 + ((t - t0) / this.win) * (x1 - x0)
     const css = (c, a = 1) => `rgba(${c.map((v) => Math.round(255 * Math.pow(Math.min(1, v), 1 / 2.2))).join(',')},${a})`
     g.font = `${fs}px 'JetBrains Mono', ui-monospace, monospace`; g.textBaseline = 'middle'
     this.lanes.forEach((L, i) => {
       const y = i * rowH, mid = y + rowH / 2
       g.fillStyle = `rgba(${mute},1)`; g.textAlign = 'left'; g.fillText(L.label, 0, mid)
+      if (i % 2 === 0) { g.fillStyle = `rgba(${ink},0.025)`; g.fillRect(x0, y, x1 - x0, rowH) }
       g.fillStyle = `rgba(${ink},0.06)`; g.fillRect(x0, y + rowH - 1, x1 - x0, 1)
       const c = L.color ?? [0.8, 0.8, 0.8]
       const segs = L.segs = L.segs.filter((s) => s.t1 > t0 - this.win * 0.2)
@@ -760,6 +766,7 @@ export class Trace {
         const pts = L.pts = L.pts.filter((p) => p[0] > t0 - this.win * 0.2)
         const lo = L.min ?? 0, hi = L.max ?? 1
         const Y = (v) => { const k = L.log ? Math.log10(1 + 9 * Math.max(0, (v - lo) / (hi - lo))) : (v - lo) / (hi - lo); return y + rowH - 3 - Math.max(0, Math.min(1, k)) * (rowH - 6) }
+        g.save(); g.beginPath(); g.rect(x0, y, x1 - x0, rowH); g.clip()
         g.strokeStyle = css(c, 0.95); g.lineWidth = 1.25; g.beginPath(); let pen = false
         for (let k = 0; k < pts.length; k++) {
           const [t, v] = pts[k]; if (Number.isNaN(v)) { pen = false; continue }
@@ -767,8 +774,8 @@ export class Trace {
           if (!pen) { g.moveTo(x, yy); pen = true } else if (L.step) { g.lineTo(x, Y(pts[k - 1][1])); g.lineTo(x, yy) } else g.lineTo(x, yy)
         }
         if (L.step && pen) g.lineTo(X(t1), Y(pts[pts.length - 1]?.[1] ?? lo))
-        g.stroke()
-        if (L.unit && pts.length) { const v = pts[pts.length - 1][1]; g.fillStyle = `rgba(${mute},0.9)`; g.textAlign = 'right'; g.fillText(Number.isNaN(v) ? '' : `${v.toFixed(L.digits ?? 2)} ${L.unit}`, x1 - 2, y + fs * 0.7) }
+        g.stroke(); g.restore()
+        if (L.unit && pts.length) { const v = pts[pts.length - 1][1]; g.fillStyle = `rgba(${ink},0.82)`; g.textAlign = 'right'; g.fillText(Number.isNaN(v) ? '' : `${v.toFixed(L.digits ?? 2)} ${L.unit}`, cw - 2, mid) }
         return
       }
       for (const s of segs) {
@@ -826,7 +833,7 @@ export class Strip {
     this.lab = lab; this.o = o; this.win = o.window ?? 4; this.pts = []
     const el = document.createElement('div'); el.className = 'sk-strip'
     el.innerHTML = `<div class="hd"><span>${o.label ?? ''}</span><b></b></div><canvas></canvas>`
-    const st = document.createElement('style'); st.textContent = `.sk-strip { margin-top:clamp(10px,2vh,24px) } .sk-strip .hd { display:flex; justify-content:space-between; font-size:clamp(11px,0.86vw,16px); color:var(--mute); margin-bottom:0.4em } .sk-strip .hd b { font-weight:500; color:var(--ink) } .sk-strip .hd b.bad { color:var(--accent) } .sk-strip canvas { display:block; width:100%; height:clamp(44px,7vh,84px) }`
+    const st = document.createElement('style'); st.textContent = `.sk-strip { margin-top:1em } .sk-strip .hd { display:flex; justify-content:space-between; align-items:baseline; gap:1em; color:var(--mute); margin-bottom:0.45em } .sk-strip .hd span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0 } .sk-strip .hd b { font-family:var(--mono); font-size:0.88em; font-weight:500; color:var(--ink); white-space:nowrap } .sk-strip .hd b.bad { color:var(--accent) } .sk-strip canvas { display:block; width:100%; height:clamp(48px,6.5vh,72px); background:var(--well); border-radius:6px }`
     document.head.appendChild(st)
     lab.$('.lab-metric').after(el); this.el = el; this.cv = el.querySelector('canvas'); this.nb = el.querySelector('.hd b')
     lab.onTick((sdt, l, dt) => this.draw())

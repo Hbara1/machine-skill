@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0 (2026-11-07)
+
+- New page chrome for every page. The right column is now one panel that sizes to its content and scrolls instead of running into the prompt bar and the "How it is computed" note, which moves inside it. The hero shows its state as a status chip and its `sub` numbers as tiles. Sliders are slimmer with the value in mono and the range right under the track. The mode buttons are one toolbar with keycaps, the break button set apart. Works the same on paper and night themes, and as a bottom sheet on phones.
+- The Trace panel and Strip chart sit on the same cards; trace values get their own gutter, rows are banded, and on phones the trace starts hidden (key T or the Trace button shows it).
+- `scale: false` hides the scale bar for abstract machines.
+
 ## 1.2.0 (2026-11-07)
 
 - A software module for firmware, embedded systems and standalone software: `software/guide.md`, the runtime `software/kit/soft-kit.js` (RTOS scheduler with priority inheritance, bus and Bluetooth LE timing, power, queueing, board and IC geometry, packets, the Trace panel), a page template, a model reference with sources, and Node tests.
