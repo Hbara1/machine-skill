@@ -114,7 +114,7 @@ const lab = new Lab({
   prompt: 'a checkout API on Black Friday, and what happens when the payment provider slows down',
   no: 6, title: 'Checkout API', sub: 'under load',
   theme: 'night', size: 1.25,
-  view: { az: 28, el: 30, dist: 2.0, target: [0.02, -0.06, 0.06], fov: 30 },
+  view: { az: 28, el: 30, dist: 2.35, target: [0.02, -0.11, 0.06], fov: 30 },
   cut: { a: [0, 0, 1], b: [0, 0, 1], center: [0, 0, 0], reach: 0.6 },
   pills: ['three.js', 'Queueing model', 'Trace', 'Film'],
 })
@@ -204,6 +204,7 @@ function retune() { clearTimeout(tune); tune = setTimeout(() => { params.lambda 
 
 // live: a fluid queue integrates the backlog so overload and recovery play out over seconds, not instantly
 const fq = new SK.FluidQueue()
+fq.N = R.stable ? params.lambda * R.s.mean : 0        // start at the steady state: L = lambda S
 let now = 0, live = { p99: R.p99, thr: R.thr, fail: R.fail, backlog: 0 }
 function step(dt) {
   const c = R.c, mu = 1 / R.s.mean
@@ -214,7 +215,8 @@ function step(dt) {
   const waitNow = waiting / (c * mu)
   const p99 = R.stable && waitNow < 0.05 ? R.p99 : Math.min(SYS.gwTimeout, waitNow + R.s.p99)
   const thr = fq.served * R.s.ok
-  const fail = clamp(1 - thr / Math.max(1e-9, params.lambda), 0, 1)
+  // failures are 504s past the gateway timeout plus checkouts whose every payment attempt timed out
+  const fail = clamp((fq.dropped + fq.served * (1 - R.s.ok)) / Math.max(1e-9, params.lambda), 0, 1)
   live = { p99, thr, fail, backlog: waiting, busy: Math.min(fq.N, c) / c }
 }
 function show() {
