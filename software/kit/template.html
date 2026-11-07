@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SYSTEM · Machine Skill</title>
+<meta name="description" content="ONE LINE ABOUT THE SOFTWARE OR DEVICE. Built with the Machine Skill skill for Claude.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<!-- lab-kit:start -->
+<script type="module" src="../../kit/lab-kit.js"></script>
+<!-- lab-kit:end -->
+<!-- soft-kit:start -->
+<script type="module" src="soft-kit.js"></script>
+<!-- soft-kit:end -->
+<script type="module">
+const { THREE, Lab, MAT, GEO, clamp, fmt } = window.LabKit
+const SK = window.SoftKit
+
+/* research: the hardware or deployment, the tasks or hops with their costs, the currents or latencies (datasheet or
+   published figure, estimates marked), the hero, the input, the break and what the model says happens */
+
+// ------------------------------------------------------------------ model:start
+// a pure model: only SK and constants, so software/tests/<name>.test.mjs can run it in Node
+const K = { cpu: 1e-3, period: 0.01 }
+function model(sim, p, hook = {}) {
+  const os = new SK.Rtos(sim, { onSeg: hook.seg })
+  os.task({ name: 'Worker', prio: 2, period: p.period, steps: [{ cpu: K.cpu }] })
+  return { os, stats() { os.sync(); return { load: os.load() } } }
+}
+// ------------------------------------------------------------------ model:end
+
+const params = { period: K.period }
+const analyse = () => SK.analyse(5, (sim) => { const m = model(sim, params); sim.runUntil(1); m.os.resetStats(); return () => m.stats() })
+let R = analyse()
+
+// 1. the lab: night theme reads best for traces and packets
+const lab = new Lab({
+  prompt: 'THE ONE LINE THE USER TYPED',
+  no: 1, title: 'System', sub: 'what it is doing',
+  theme: 'night', size: 0.06,         // metres: the board's or the bench's longest side
+  view: { az: 24, el: 34, dist: 2.1, target: [0, 0, 0] },
+  cut: { a: [0, 0, 1], b: [0, 0, 1] },
+})
+
+// 2. the physical half: a board with real packages, or service blocks on a bench
+const pcb = SK.board({ w: 0.05, d: 0.03, t: 0.0008, mask: 'green', traces: [{ pts: [[-0.01, 0], [0.01, 0]], w: 0.0002 }] })
+lab.add(pcb.group, { name: 'PCB', explode: [0, 0.01, 0] })
+const mcu = SK.ic({ pkg: 'qfn', w: 0.005, pins: 10, pitch: 0.0004, mark: ['MCU'] }); mcu.position.set(0.01, pcb.t, 0)
+lab.add(mcu, { name: 'MCU', parent: pcb.group, explode: [0, 0.005, 0] })
+
+// 3. the software half: a slowed live copy of the same model draws the trace and moves the packets
+const trace = new SK.Trace(lab, { title: 'Scheduler', window: 0.05, lanes: [{ id: 'Worker', color: [1, 0.62, 0.25] }] })
+const pk = new SK.Packets(lab, { parent: pcb.group, size: 0.0004 })
+const SCALE = 0.05
+let live
+function startLive() { const sim = new SK.Sim(); trace.clear(); live = { sim, m: model(sim, params, { seg: (lane, t0, t1, kind) => { if (lane !== 'idle') trace.seg(lane, t0, t1, { kind }) } }) } }
+startLive()
+
+// 4. the numbers: the hero from the full model, never from the slowed copy
+lab.hero({ label: 'CPU load', unit: '%', max: 100, digits: 1 })
+const per = lab.slider({ id: 'period', label: 'Period', min: 2, max: 50, value: 10, unit: 'ms', onInput: (v) => { params.period = v / 1000; R = analyse(); startLive() } })
+let heroAt = 0
+lab.onTick((sdt) => {
+  live.sim.runUntil(live.sim.now + sdt * SCALE); live.m.os.sync(); trace.now = live.sim.now
+  if ((heroAt -= sdt) <= 0) { heroAt = 0.25; lab.setHero(R.load * 100, { state: 'running', sub: `period ${fmt(params.period * 1000)} ms` }) }
+})
+
+// 5. break it, explain it, film it
+lab.breakIt({ label: 'Break it', run: () => {}, reset: () => {} })
+lab.how('Plain words on the model, what is an estimate, and the 1:20 slowdown of the trace.', ['U = Σ C / T'])
+lab.autoFilm({ runBeat: 'It runs the real schedule.', runSub: 'Every task, timed.', breakBeat: 'Break one thing.', breakSub: 'What the model says happens.' })
+lab.start()
+</script>
+</body>
+</html>

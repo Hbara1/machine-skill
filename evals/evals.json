@@ -25,6 +25,21 @@
       "id": 5,
       "prompt": "/machine a V8 engine",
       "expected_output": "A cross plane V8 on an engine stand with block, heads, crank, rods, pistons, cams and valves moving from slider crank kinematics and the firing order, torque and power from a BMEP curve over rpm, and valve float as the computed break above the redline."
+    },
+    {
+      "id": 6,
+      "prompt": "/machine the firmware on a BLE ECG patch",
+      "expected_output": "One self contained HTML file (lab-kit and soft-kit inlined) on the night set: the patch at real size (about 50 x 24 mm board, nRF52832 QFN48, ADS1292R, CR2032, electrode snaps, housing in x-ray) with datasheet package sizes. A simulated fixed priority preemptive RTOS runs the real tasks (data ready ISR, acquisition, DSP, streaming, logging) with locks and DMA waits; the Trace panel shows task slices, SPI bursts, radio events and a current trace, slowed and labelled as slowed. Hero is battery life in days from datasheet currents (a CR2032 at 250 SPS should land in single or low double digit days); sliders are sample rate and connection interval. Break is a lock without priority inheritance, and the model, not an animation, produces blocked slices and lost samples. A Node test extracts the model and checks it."
+    },
+    {
+      "id": 7,
+      "prompt": "/machine a checkout API under Black Friday load",
+      "expected_output": "One self contained HTML file on the night set: services as machined blocks with status LEDs (gateway, pods, database, payment provider), queues as glass columns whose fill is the computed depth, glass conduits with request packets. Hero is p99 latency from M/M/c or M/G/c queueing with stated service times; an arrivals slider shows the knee near capacity, and Little's law gives threads busy and calls in flight. Overload uses a fluid backlog, not a steady state formula. Break is a slow dependency, with retries and timeouts computed: capacity collapses, failures and the provider's call rate rise, and how() names the fixes (shorter timeouts, retry budget with backoff, circuit breaker)."
+    },
+    {
+      "id": 8,
+      "prompt": "/machine a CAN bus in a car with a babbling node",
+      "expected_output": "Real ECUs and a twisted pair harness at real size; frames timed with CAN 2.0 worst case bit stuffing; arbitration by identifier shown on the trace; bus load computed. Break: a node transmitting its highest priority frame continuously starves every lower identifier, and the model shows missed deadlines per message."
     }
   ]
 }

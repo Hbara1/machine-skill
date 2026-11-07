@@ -1,6 +1,6 @@
 {
   "name": "machine-skill",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Describe any machine in one line. Claude builds a photoreal, physics based, interactive simulation of it, plus the film to post it.",
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,10 @@
     "record": "node scripts/record.mjs",
     "shot": "node scripts/shot.mjs",
     "pinkscan": "node scripts/pinkscan.mjs",
-    "inline": "node scripts/inline.mjs examples/*.html"
+    "inline": "node scripts/inline.mjs examples/*.html software/examples/*.html",
+    "test": "node software/tests/sim.test.mjs && node software/tests/ecg-model.test.mjs && node software/tests/checkout-model.test.mjs"
   },
-  "devDependencies": { "playwright": "^1.48.0" }
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
 }

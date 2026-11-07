@@ -1,6 +1,6 @@
 ---
 name: machine
-description: Turn one line ("a turbofan jet engine", "a mechanical watch", "an LVAD heart pump") into a photoreal, physics based, interactive 3D simulation of that machine in a single HTML file, plus a 20 to 30 second film to post it. Real proportions in metres, real materials (PBR metals, paints, polymers, glass), studio lighting with soft shadows, moving parts driven by a small solver that computes real numbers (thrust, torque, rpm, flow, pressure, efficiency), and modes to explode it, cut it open with clean section caps, x-ray it, slow it down, label it and break it. Use this whenever someone asks to build, simulate, visualise, explain or "show how X works" for any machine, engine, mechanism, device, instrument or piece of hardware, wants an interactive 3D model or a cutaway, or wants a video of a machine for a post, even if they never say "simulation" or "three.js".
+description: Turn one line ("a turbofan jet engine", "an LVAD heart pump", "the firmware on a BLE ECG patch", "a checkout API under load") into a photoreal, physics based, interactive 3D simulation in one HTML file, plus a 20 to 30 second film to post it. Real proportions, real materials, studio lighting, parts driven by a solver that computes real numbers, and modes to explode, cut open, x-ray, slow, label and break it. Software, firmware and embedded systems too: the real board at real size with a simulated RTOS schedule, bus frames, radio events and current on a live trace, or services as machined blocks with queues, p99 latency and retry storms from queueing theory. Use whenever someone asks to build, simulate, visualise, explain or "show how X works" for any machine, device, instrument, embedded product, firmware, scheduler, protocol, backend or distributed system, wants an interactive 3D model or cutaway, or wants a video of one, even if they never say "simulation" or "three.js".
 ---
 
 # Machine Skill
@@ -26,6 +26,10 @@ A result is not done while any of these is true:
 - a number on screen is typed in rather than computed by the solver
 - the cutaway shows hollow shells instead of solid section faces
 - the first frame of the film is not beautiful
+
+## Software, firmware and embedded systems
+
+If the one line is about software (firmware, an RTOS, a driver, a protocol, a backend, an API, a queue, a pipeline, a distributed system) or about a device whose interesting part is its firmware, read `software/guide.md` before you start, then open `software/examples/ecg-patch.html` (embedded) and `software/examples/checkout-api.html` (standalone). Start from `software/kit/template.html`. The runtime `software/kit/soft-kit.js` adds a discrete event RTOS scheduler, bus and Bluetooth LE timing, power accounting, queueing models, board and IC geometry, packets, and the trace panel. The equations and their sources are in `software/references/models.md`. Everything on this page still holds.
 
 ## Workflow
 

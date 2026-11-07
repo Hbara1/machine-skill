@@ -35,7 +35,7 @@ Then one command turns it into a film for your feed.
 ## Quick start
 
 ```sh
-npx skills add AirsupHQ/machine-skill -g -a claude-code
+npx skills add Hbara1/machine-skill -g -a claude-code
 ```
 
 Then in Claude Code:
@@ -75,6 +75,24 @@ Each machine was made from the single line under it. Click one to run it live.
 
 The pages are in [`examples/`](examples): each is one HTML file you can open from disk. More machines are coming; see [V2-IDEAS.md](V2-IDEAS.md), and send yours as a pull request.
 
+## Software, firmware and embedded systems
+
+This fork adds a software module. Software has no silhouette, so the page gives it one: firmware runs on the real board at real size, and a backend runs as machined service blocks with glass queue columns. Every event and number on screen comes from a model that is actually running.
+
+| | |
+|---|---|
+| **ECG patch firmware** · *a wearable ECG patch: an nRF52832 reading an ADS1292R over SPI, FreeRTOS, streaming over Bluetooth* | A simulated FreeRTOS schedule with the real tasks, interrupts, locks and DMA waits; SPI frames ride the traces, radio events ring from the antenna, and the current trace comes from datasheet currents. About 16 days on a CR2032 at 250 SPS and a 30 ms interval. Break: swap the buffer mutex for a binary semaphore and priority inversion drops ECG samples. [`software/examples/ecg-patch.html`](software/examples/ecg-patch.html) |
+| **Checkout API** · *a checkout API on Black Friday, and what happens when the payment provider slows down* | A gateway, eight pods, Postgres and a payment provider. p99 from M/G/c queueing over 20,000 simulated checkouts, a fluid backlog for overload. About 500 ms p99 at 300 checkouts a second. Break: the provider hangs 60 % of calls, the retries send 2.2 calls per checkout and capacity falls from about 680 to 90 a second. [`software/examples/checkout-api.html`](software/examples/checkout-api.html) |
+
+The runtime is [`software/kit/soft-kit.js`](software/kit/soft-kit.js): a discrete event RTOS scheduler with priority inheritance, SPI, I2C, UART, CAN and Bluetooth LE timing, power accounting, Erlang C, M/M/c, a fluid queue and retry amplification, PCB, IC package and passive geometry, packets and radio rings, and the Trace panel (key T), a logic analyser and scheduler timeline that scrolls with the model. Claude reads [`software/guide.md`](software/guide.md); the equations and sources are in [`software/references/models.md`](software/references/models.md). The models run headless in Node: `node software/tests/sim.test.mjs`.
+
+```text
+/machine the firmware on a BLE heart rate strap, and what happens when the stack overflows
+/machine a CAN bus in a car, with a babbling node
+/machine a Kafka pipeline when one partition gets hot
+/machine a PID loop on a quadcopter's ESCs, sampled at 8 kHz
+```
+
 ## What you get
 
 | | |
@@ -92,10 +110,10 @@ Machine Skill is a standard [Agent Skill](https://code.claude.com/docs/en/skills
 
 | | Command | Installs to |
 |---|---|---|
-| **skills CLI**, for you | `npx skills add AirsupHQ/machine-skill -g -a claude-code` | `~/.claude/skills/machine` |
-| **skills CLI**, one project | `npx skills add AirsupHQ/machine-skill` | `.claude/skills/machine` |
-| **git**, for you | `git clone https://github.com/AirsupHQ/machine-skill.git ~/.claude/skills/machine` | `~/.claude/skills/machine` |
-| **git**, one project | `git clone https://github.com/AirsupHQ/machine-skill.git .claude/skills/machine` | `.claude/skills/machine` |
+| **skills CLI**, for you | `npx skills add Hbara1/machine-skill -g -a claude-code` | `~/.claude/skills/machine` |
+| **skills CLI**, one project | `npx skills add Hbara1/machine-skill` | `.claude/skills/machine` |
+| **git**, for you | `git clone https://github.com/Hbara1/machine-skill.git ~/.claude/skills/machine` | `~/.claude/skills/machine` |
+| **git**, one project | `git clone https://github.com/Hbara1/machine-skill.git .claude/skills/machine` | `.claude/skills/machine` |
 
 Claude Code picks up new skills in a running session; if the `skills` folder did not exist when the session started, run `/reload-skills`.
 
@@ -169,6 +187,8 @@ machine-skill/
 │   ├── lab-kit.js           the runtime (inlined into every page)
 │   └── template.html        the page Claude starts from
 ├── references/solvers.md    physics recipes with real constants
+├── software/                the software module: guide.md, kit/soft-kit.js, kit/template.html,
+│                            references/models.md, examples/, tests/
 ├── scripts/                 shot, record, pinkscan, inline (+ lib: server, browser, guard, png)
 ├── examples/                the example machines, one HTML file each, and their posters
 ├── film/launch.html         the launch film director page
@@ -187,13 +207,15 @@ machine-skill/
 
 ## Limits
 
-- **It builds machines.** Mechanisms, engines, instruments, devices. People, landscapes and maps come out weaker.
+- **It builds machines and the software that runs them.** Mechanisms, engines, instruments, devices, firmware and services. People, landscapes and maps come out weaker.
+- **Software models are timing and queueing models, not emulators.** The firmware page simulates the schedule, not the instruction stream; the service page models queues, not your code. Each says which costs are estimates.
 - **The physics is a small honest model, not CFD or FEA.** Each page says what it computes and what it simplifies. Numbers are checked against public figures, not certified.
 - **Real parts, not a CAD export.** Geometry is procedural three.js; it is accurate in proportion and part count, not to manufacturing tolerance.
 - **Heavy pages want a real GPU.** About 600k triangles with shadows, AO and bloom runs at 60 fps on a recent laptop.
 
 ## Siblings and credits
 
+- **[AirsupHQ/machine-skill](https://github.com/AirsupHQ/machine-skill)** is the original; this fork adds the software module.
 - **[Factory skill](https://airsup.ai/lab/factory-skill)**: the same idea for whole factories. Describe a line in one sentence and Claude builds it as a live discrete event simulation.
 - **[Anatomy](https://github.com/wheresryan22/anatomy)** by Ryan (@wheresryan22) showed how good a one line machine skill can be. Its numbered beat film inspired ours.
 - **[airsup.ai/lab](https://airsup.ai/lab)** is where these machines come from: more than 50 simulations built with Claude Opus 5.5.
