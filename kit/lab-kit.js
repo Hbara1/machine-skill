@@ -847,6 +847,7 @@ export class Lab {
     const w = innerWidth, h = innerHeight
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix()
     this.renderer.setSize(w, h); this.composer.setSize(w, h)
+    const nw = innerWidth <= 760; if (this.view && (nw || nw !== this._narrow)) this._applyView(this.view); this._narrow = nw
     const s = this.renderer.getDrawingBufferSize(new THREE.Vector2())
     this.ao.setSize(s.x, s.y); this.grade.uniforms.uRes.value.set(s.x, s.y)
   }
@@ -896,11 +897,13 @@ export class Lab {
   }
   _applyView(v) {
     const t = new THREE.Vector3(...v.target).multiplyScalar(this.k)
-    const d = v.dist * 2.4
+    // narrow screens: pull back so the machine fits the width, centre it, and lift it above the bottom sheet
+    const asp = innerWidth / innerHeight, narrow = innerWidth <= 760 && !this.filmMode
+    const d = v.dist * 2.4 * (narrow ? Math.min(3, Math.max(1, 1.25 / asp)) : 1)
     const az = THREE.MathUtils.degToRad(v.az), el = THREE.MathUtils.degToRad(v.el)
     this.camera.fov = v.fov ?? 30
     // shift the frame so the subject sits left of the side column
-    this.camera.setViewOffset(innerWidth, innerHeight, -(v.frameX ?? 0) * innerWidth, 0, innerWidth, innerHeight)
+    this.camera.setViewOffset(innerWidth, innerHeight, narrow ? 0 : -(v.frameX ?? 0) * innerWidth, narrow ? 0.2 * innerHeight : 0, innerWidth, innerHeight)
     this.camera.position.set(t.x + d * Math.cos(el) * Math.sin(az), t.y + d * Math.sin(el), t.z + d * Math.cos(el) * Math.cos(az))
     this.controlsOrbit.target.copy(t)
     this.camera.lookAt(t)
