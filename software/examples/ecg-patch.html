@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECG patch firmware · Machine Skill</title>
+<meta name="description" content="A wearable ECG patch and the firmware that runs it: FreeRTOS on an nRF52832 reading an ADS1292R over SPI and streaming over Bluetooth LE. Built with the Machine Skill software module for Claude.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<!-- lab-kit:start -->
+<script type="module" src="../../kit/lab-kit.js"></script>
+<!-- lab-kit:end -->
+<!-- soft-kit:start -->
+<script type="module" src="../kit/soft-kit.js"></script>
+<!-- soft-kit:end -->
+<script type="module">
+const { THREE, Lab, MAT, GEO, clamp, fmt } = window.LabKit
+const SK = window.SoftKit
+
+/* ------------------------------------------------------------------ research
+"a wearable ECG patch: an nRF52832 reading an ADS1292R over SPI, FreeRTOS, streaming over BLE"
+
+Hardware (datasheet envelopes):
+  nRF52832-QFAA   QFN48 6.0 x 6.0 x 0.85 mm, 0.4 mm pitch, Cortex-M4F 64 MHz, 512 kB flash, 64 kB RAM
+  ADS1292R        VQFN32 5.0 x 5.0 x 0.9 mm, 0.5 mm pitch, 2 ch 24 bit delta sigma AFE, 125 to 8k SPS
+  MX25R1635F      USON8 2 x 3 mm, 16 Mbit SPI NOR, the session log
+  32 MHz crystal  2016 (2.0 x 1.6 mm), the radio clock; 32.768 kHz crystal 2012 (2.0 x 1.2 mm), the RTC
+  chip antenna    3.2 x 1.6 mm ceramic, 2.45 GHz, on a ground clearance at the board end
+  CR2032          20 x 3.2 mm, 225 mAh nominal, on the back in a stamped holder; two 4 mm ECG snaps
+  board           50 x 24 mm stadium, 0.8 mm FR4, matte black mask, ENIG
+
+Firmware (FreeRTOS, prio high to low): SoftDevice radio ISR > DRDY ISR > Acquire 4 > DSP 3 = Classifier 3 > Stream 2 > Log 1
+  DRDY ISR       ADS1292R data ready at the sample rate: notify Acquire                      3 us
+  Acquire        take(buf) 4 us, SPI read of 9 bytes at 4 MHz over EasyDMA (core free) 19 us, unpack 6 us, give(buf)
+  DSP            every 100 ms: take(buf), copy 25 us, give, then 1,800 cycles per sample (two biquads per channel and Pan-Tompkins QRS)
+  Stream         before each connection event: pack the new samples as 16 bit deltas (4 B per sample), 20 us + 0.05 us/B
+  SoftDevice     per connection event 120 us of CPU; radio on for the PDUs (Core spec timing, LE 1M)
+  Classifier     notified by Log, 9 ms per run (RR intervals and morphology on a 10 s window)
+  Log            every 1 s: take(buf), copy 0.4 ms, notify Classifier, 50 us bookkeeping, give(buf), SPI flash program 3 ms (core free)
+
+Power (nRF52832 PS v1.4 with the DC/DC on; ADS1292R datasheet):
+  CPU 3.7 mA at 64 MHz from flash; System ON sleep with RTC 1.9 uA; radio TX 0 dBm 5.3 mA, RX 5.4 mA
+  per connection event 0.4 ms of HFXO and ramp at about 1 mA (estimate); AFE 335 uW per channel at 3 V = 0.22 mA for two
+  NOR flash program 3 mA while it writes (estimate); CR2032 225 mAh, 80 % usable at this pulse load
+
+Hero: battery life. Inputs: sample rate and connection interval. The break: the ring buffer lock is a binary semaphore
+instead of a mutex, so there is no priority inheritance, and Log notifies Classifier while it still holds the lock.
+Acquire blocks behind the 9 ms Classifier, the ADS1292R overwrites unread samples, and the ECG has gaps.
+------------------------------------------------------------------ */
+
+// ------------------------------------------------------------------ model:start
+const HW = {
+  f: 64e6, Icpu: 3.7e-3, Isleep: 1.9e-6, Itx: 5.3e-3, Irx: 5.4e-3, ramp: [0.4e-3, 1.0e-3], Iafe: 0.22e-3, Iflash: 3e-3,
+  spiHz: 4e6, cellmAh: 225, usable: 0.8, dspCycles: 1800, sdCpu: 120e-6, classify: 9e-3, flashProg: 3e-3,
+}
+function firmware(sim, p, hook = {}) {
+  const os = new SK.Rtos(sim, { onSeg: hook.seg, onOverrun: (t, now) => { if (t.name === 'Acquire') { drops++; hook.drop?.(now) } } })
+  os.mutex('buf', { inherit: p.lock !== 'binary' })
+  let drops = 0, fresh = 0, radioQ = 0, flashQ = 0, events = 0, bytesSent = 0, maxLat = 0
+  const T = 1 / p.sps
+  os.isr({ name: 'SoftDevice', prio: 200, steps: (d) => [{ cpu: HW.sdCpu }, { call: () => hook.radio?.(sim.now, d) }] })
+  os.isr({ name: 'DRDY', prio: 100, cpu: 3e-6, then: (o) => { hook.drdy?.(sim.now); o.release('Acquire', sim.now) } })
+  os.task({ name: 'Acquire', prio: 4, maxPending: 1, steps: (t0) => [
+    { take: 'buf' }, { cpu: 4e-6 }, { call: () => hook.spi?.(sim.now) }, { wait: SK.bus.spi(9, HW.spiHz) }, { cpu: 6e-6 },
+    { call: () => { fresh++; maxLat = Math.max(maxLat, sim.now - t0) } }, { give: 'buf' }] })
+  os.task({ name: 'DSP', prio: 3, period: 0.1, phase: 0.013, maxPending: 2, steps: () => {
+    const n = Math.round(0.1 * p.sps)
+    return [{ take: 'buf' }, { cpu: 25e-6 }, { give: 'buf' }, { cpu: (n * HW.dspCycles) / HW.f }] } })
+  os.task({ name: 'Classifier', prio: 3, maxPending: 1, steps: [{ cpu: HW.classify }] })
+  os.task({ name: 'Stream', prio: 2, maxPending: 2, steps: () => {
+    const bytes = fresh * 4; fresh = 0
+    return [{ cpu: 20e-6 + bytes * 0.05e-6 }, { call: () => { sim.after(0.4e-3, () => os.release('SoftDevice', bytes)) } }] } })
+  os.task({ name: 'Log', prio: 1, period: 1, phase: 0.31, maxPending: 1, steps: [
+    { take: 'buf' }, { cpu: 0.4e-3 }, { call: (o) => o.release('Classifier') }, { cpu: 50e-6 }, { give: 'buf' },
+    { call: () => hook.flash?.(sim.now) }, { wait: HW.flashProg }, { call: () => { flashQ += HW.Iflash * HW.flashProg } }] })
+  // the AFE clock: DRDY at the sample rate
+  sim.every(T, () => { os.release('DRDY') }, 0.0007)
+  // the link: a connection event every interval; the radio time comes from the Core spec timing of the PDUs
+  sim.every(p.ci, () => { os.release('Stream') }, 0.002)
+  hook.radioQ = (bytes) => {
+    const ev = SK.ble.event(bytes)
+    radioQ += ev.tx * HW.Itx + (ev.rx + ev.gaps) * HW.Irx + HW.ramp[0] * HW.ramp[1]
+    events++; bytesSent += bytes
+    return ev
+  }
+  const radio = hook.radio
+  hook.radio = (now, bytes) => { const ev = hook.radioQ(bytes); radio?.(now, bytes, ev) }
+  return {
+    os,
+    stats() {
+      os.sync()
+      const Tn = sim.now - os.t0, busy = os.busy
+      const Q = busy * HW.Icpu + (Tn - busy) * HW.Isleep + radioQ + flashQ + HW.Iafe * Tn
+      const I = Q / Tn
+      return { load: busy / Tn, I, days: (HW.cellmAh * 1e-3 * HW.usable) / I / 86400 * 3600, drops: drops / Tn, lat: maxLat,
+        perEvent: bytesSent / Math.max(1, events), share: { cpu: busy * HW.Icpu / Q, radio: radioQ / Q, afe: HW.Iafe * Tn / Q, other: (flashQ + (Tn - busy) * HW.Isleep) / Q },
+        dspR: os.tasks.DSP.stats.maxResp, acqBlocked: os.tasks.Acquire.stats.maxBlocked }
+    },
+  }
+}
+// ------------------------------------------------------------------ model:end
+
+const params = { sps: 250, ci: 0.03, lock: 'mutex' }
+const analyse = () => SK.analyse(6, (sim) => { const fw = firmware(sim, params); sim.runUntil(1); fw.os.resetStats(); return () => fw.stats() })
+let R = analyse()
+
+// ------------------------------------------------------------------ lab
+const lab = new Lab({
+  prompt: 'a wearable ECG patch: an nRF52832 reading an ADS1292R over SPI, FreeRTOS, streaming over Bluetooth',
+  no: 5, title: 'ECG patch', sub: 'the firmware, running',
+  theme: 'night', size: 0.07,
+  view: { az: 24, el: 38, dist: 1.42, target: [0.001, 0.0045, 0.002], fov: 30 },
+  cut: { a: [0, 0, 1], b: [0, 0, 1], center: [0, 0, 0.0004], reach: 0.6 },
+  pills: ['three.js', 'FreeRTOS model', 'Trace', 'Film'],
+})
+
+// ------------------------------------------------------------------ materials
+const housingM = MAT.plastic({ color: [0.86, 0.87, 0.88], roughness: 0.36 })
+const foamM = MAT.plastic({ color: [0.92, 0.92, 0.9], roughness: 0.85 })
+const gelM = MAT.glass({ color: [0.62, 0.8, 0.95], roughness: 0.3, transmission: 0.7, thickness: 0.0006 })
+
+// ------------------------------------------------------------------ stack heights (m)
+const GEL = 0.0007, FOAM = 0.0011, HOLD = 0.0040, BT = 0.0008
+const F0 = GEL + FOAM                           // top of the foam
+const BY = F0 + 0.0006 + HOLD                   // board bottom
+const W = 0.05, D = 0.024
+
+// shapes: a stadium of length L and width Wd in the XZ plane (Shape x, y -> world x, -z)
+const stadium = (L, Wd) => { const s = new THREE.Shape(), r = Wd / 2, a = L / 2 - r; s.moveTo(-a, -r); s.lineTo(a, -r); s.absarc(a, 0, r, -Math.PI / 2, Math.PI / 2, false); s.lineTo(-a, r); s.absarc(-a, 0, r, Math.PI / 2, Math.PI * 1.5, false); return s }
+const flat = (shape, h, y, bevel = 0) => { const g = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 3, curveSegments: 64 }); g.rotateX(-Math.PI / 2); g.translate(0, y, 0); return g }
+
+// ------------------------------------------------------------------ the adhesive electrode pad and the gel
+const foam = lab.mesh(flat(stadium(0.074, 0.036), FOAM, GEL, 0.0003), foamM, { name: 'Adhesive foam pad' })
+const gels = new THREE.Group()
+for (const x of [-0.0195, 0.0195]) gels.add(new THREE.Mesh(GEO.disc(0.0062, GEL), gelM).translateX(x).translateY(GEL / 2))
+lab.add(gels, { name: 'Hydrogel electrodes', count: 2 })
+
+// ------------------------------------------------------------------ the board
+// coordinates on the board: x along the length, z across, in metres from the board centre
+const MCU = [0.0035, 0.0], AFE = [-0.0105, 0.0], FL = [-0.0035, -0.0068], ANT = [0.0205, 0.0]
+const spiNets = [
+  { name: 'SCLK', z: -0.0012 }, { name: 'MOSI', z: -0.0004 }, { name: 'MISO', z: 0.0004 }, { name: 'CS', z: 0.0012 }, { name: 'DRDY', z: 0.002 },
+]
+const route = (z, zEnd) => [[AFE[0] + 0.0027, z], [-0.0055, z], [-0.0035, zEnd], [MCU[0] - 0.0032, zEnd]]
+const traces = []
+for (const n of spiNets) traces.push({ pts: route(n.z, n.z * 1.6), w: 0.00014 })
+// RF feed (50 ohm coplanar), power and the flash bus
+traces.push({ pts: [[MCU[0] + 0.0032, 0.0008], [0.0115, 0.0008], [0.0135, 0], [ANT[0] - 0.0018, 0]], w: 0.0003 })
+for (let k = 0; k < 4; k++) traces.push({ pts: [[FL[0] + 0.0012, FL[1] + (k - 1.5) * 0.0005], [FL[0] + 0.0028 + k * 0.0004, FL[1] + (k - 1.5) * 0.0005], [MCU[0] - 0.0018 + k * 0.0004, -0.0032]], w: 0.00012 })
+traces.push({ pts: [[-0.021, 0.0055], [-0.016, 0.0055], [-0.013, 0.0028]], w: 0.0002 }, { pts: [[0.016, 0.0055], [0.008, 0.0055], [0.0055, 0.0032]], w: 0.00025 })
+const pcb = SK.board({
+  w: W, d: D, t: BT, shape: 'stadium', mask: 'matteBlack', traces,
+  pours: [{ x: -0.006, z: 0.0075, w: 0.026, d: 0.006 }, { x: -0.006, z: -0.0085, w: 0.024, d: 0.004 }],
+  keepout: [{ x: 0.0205, z: 0, w: 0.0085, d: 0.024 }],
+  vias: [[-0.004, 0.003], [-0.0045, -0.003], [0.0105, 0.0035], [0.011, -0.0035], [-0.016, 0.004], [-0.016, -0.004], [0.0, 0.0082], [0.0005, -0.0082], [0.008, 0.007], [0.008, -0.007]],
+  pads: [
+    ...[0, 1, 2, 3, 4, 5].map((i) => ({ x: -0.0145 + (i % 3) * 0.00127, z: 0.0072 + Math.floor(i / 3) * 0.00127, w: 0.00079, round: true })),
+    { x: 0.013, z: -0.0082, w: 0.0012, round: true }, { x: 0.015, z: -0.0082, w: 0.0012, round: true },
+  ],
+  silk: [
+    { text: 'SWD', x: -0.0132, z: 0.0099, size: 0.0007 },
+    { text: 'TP1', x: 0.013, z: -0.0098, size: 0.0006 }, { text: 'TP2', x: 0.015, z: -0.0098, size: 0.0006 },
+    { text: 'U1', x: MCU[0], z: -0.0042, size: 0.0007 }, { text: 'U2', x: AFE[0], z: -0.0036, size: 0.0007 },
+    { text: 'ANT', x: ANT[0], z: 0.0032, size: 0.0007 },
+    { text: 'ECG PATCH  REV C', x: -0.002, z: 0.0103, size: 0.0008, weight: 500 },
+    { text: 'RA', x: -0.0195, z: 0, size: 0.0014, side: 'bottom' }, { text: 'LA', x: 0.0195, z: 0, size: 0.0014, side: 'bottom' },
+    { text: '+ CR2032', x: 0.003, z: 0.0098, size: 0.0009, side: 'bottom' },
+  ],
+  outline: [{ x: MCU[0], z: 0, w: 0.0068, d: 0.0068 }, { x: AFE[0], z: 0, w: 0.0058, d: 0.0058 }, { x: ANT[0], z: 0, w: 0.0038, d: 0.0022 }],
+})
+const boardG = pcb.group; boardG.position.y = BY
+lab.add(boardG, { name: 'PCB', explode: [0, 0.013, 0], count: 1 })
+const onTop = (o, x, z, rot = 0) => { o.position.set(x, BT, z); o.rotation.y = rot; return o }
+
+const nrf = onTop(SK.ic({ pkg: 'qfn', w: 0.006, h: 0.00085, pins: 12, pitch: 0.0004, mark: ['N52832', 'QFAAE0', '2347AB'] }), ...MCU)
+lab.add(nrf, { name: 'nRF52832', parent: boardG, explode: [0, 0.006, 0], count: 49 })
+const ads = onTop(SK.ic({ pkg: 'qfn', w: 0.005, h: 0.0009, pins: 8, pitch: 0.0005, mark: ['ADS1292R', 'TI 39K', 'C4VG'] }), ...AFE)
+lab.add(ads, { name: 'ADS1292R', parent: boardG, explode: [0, 0.006, 0], count: 33 })
+const flash = onTop(SK.ic({ pkg: 'qfn', w: 0.003, d: 0.002, h: 0.0006, pins: 2, pitch: 0.0008, mark: ['MX25R', '1635F'] }), ...FL)
+lab.add(flash, { name: 'NOR flash', parent: boardG, explode: [0, 0.005, 0], count: 9 })
+const x32m = onTop(SK.xtal({ w: 0.002, d: 0.0016, h: 0.00045 }), 0.0095, -0.0035)
+const x32k = onTop(SK.xtal({ w: 0.002, d: 0.0012, h: 0.0006 }), 0.0095, 0.0036)
+lab.add(x32m, { name: '32 MHz crystal', parent: boardG, explode: [0, 0.0045, 0] })
+lab.add(x32k, { name: '32.768 kHz crystal', parent: boardG, explode: [0, 0.0045, 0] })
+const antenna = onTop(new THREE.Mesh(GEO.rbox(0.0032, 0.0011, 0.0016, 0.0001), MAT.ceramic({ color: [0.93, 0.92, 0.88] })), ANT[0], 0)
+antenna.geometry.translate(0, 0.00055, 0)
+const antCap = new THREE.Mesh(GEO.merge([GEO.rbox(0.0005, 0.00112, 0.00162, 0.00005).translate(-0.00135, 0.00056, 0), GEO.rbox(0.0005, 0.00112, 0.00162, 0.00005).translate(0.00135, 0.00056, 0)]), SK.MATX.tin())
+antenna.add(antCap)
+lab.add(antenna, { name: 'Chip antenna', parent: boardG, explode: [0, 0.0045, 0] })
+const ledM = new THREE.MeshStandardMaterial({ color: 0x0a120c, emissive: new THREE.Color(0.2, 1, 0.45), emissiveIntensity: 0, roughness: 0.2, toneMapped: false })
+const led = onTop(new THREE.Group(), -0.0005, 0.0085)
+led.add(new THREE.Mesh(GEO.rbox(0.0016, 0.00045, 0.0008, 0.00006).translate(0, 0.000225, 0), SK.MATX.ceramic()))
+led.add(new THREE.Mesh(GEO.rbox(0.0009, 0.00012, 0.00062, 0.00003).translate(0, 0.0005, 0), ledM))
+lab.add(led, { name: 'Status LED', parent: boardG, explode: [0, 0.004, 0], count: 1 })
+
+// passives: decoupling around each IC, the DC/DC pair, the crystal load caps, the antenna match
+const P = []
+const ring = (cx, cz, r, n, size, kind, a0 = 0) => { for (let i = 0; i < n; i++) { const a = a0 + (i / n) * Math.PI * 2; P.push({ x: cx + Math.cos(a) * r, z: cz + Math.sin(a) * r * 0.9, rot: a + Math.PI / 2, size, kind }) } }
+ring(MCU[0], MCU[1], 0.0048, 8, '0402', 'C', 0.39)
+ring(AFE[0], AFE[1], 0.0043, 7, '0402', 'C', 0.2)
+for (const [x, z, k] of [[-0.0145, -0.002, 'R'], [-0.0145, -0.0008, 'R'], [-0.0145, 0.0008, 'C'], [-0.0145, 0.002, 'C'], [-0.0155, -0.0045, 'R'], [-0.0155, 0.0045, 'R']]) P.push({ x, z, rot: Math.PI / 2, size: '0402', kind: k })
+for (const [x, z] of [[0.0115, -0.0052], [0.0115, -0.0018], [0.0115, 0.0024], [0.0115, 0.0052]]) P.push({ x, z, rot: Math.PI / 2, size: '0402', kind: 'C' })
+for (const [x, z, k] of [[0.0151, 0.0011, 'C'], [0.0158, 0, 'L'], [0.0151, -0.0011, 'C']]) P.push({ x, z, rot: 0, size: '0402', kind: k })
+P.push({ x: 0.002, z: -0.0062, rot: 0, size: '0805', kind: 'L' }, { x: 0.0045, z: -0.0062, rot: 0, size: '0402', kind: 'L' })
+for (const [x, z] of [[-0.0005, -0.0089], [0.0075, -0.0083], [0.0075, 0.0083], [-0.003, 0.0085], [0.002, 0.0088]]) P.push({ x, z, rot: 0, size: '0603', kind: 'C' })
+P.push({ x: -0.006, z: -0.0068, rot: Math.PI / 2, size: '0402', kind: 'C' }, { x: -0.0005, z: -0.0068, rot: Math.PI / 2, size: '0402', kind: 'R' })
+const passives = SK.chips(P, { y: BT }); boardG.add(passives)
+lab.add(passives, { name: 'Passives', parent: boardG, explode: [0, 0.003, 0], count: P.length })
+
+// the back: coin cell holder and the two ECG snaps, through the foam into the gel
+const holder = SK.coinHolder({ r: 0.0101, h: HOLD, strap: 0.0065 }); holder.rotation.x = Math.PI; holder.position.set(0.003, 0, 0)
+lab.add(holder, { name: 'Coin cell holder', parent: boardG, explode: [0, 0, 0] })
+const cell = SK.coinCell({ r: 0.01, h: 0.0032 }); cell.position.set(0.003, F0 + 0.0008, 0)
+lab.add(cell, { name: 'CR2032', explode: [0, 0.0045, 0] })
+const snaps = new THREE.Group()
+for (const x of [-0.0195, 0.0195]) { const s = SK.snap({ r: 0.002, h: HOLD + 0.0006 + FOAM }); s.position.set(x, GEL, 0); snaps.add(s) }
+lab.add(snaps, { name: 'Electrode snaps', explode: [0, 0.0025, 0], count: 2 })
+
+// the housing: a thin injection moulded shell, x-ray shows the board through it
+const cover = new THREE.Group()
+const outer = stadium(0.058, 0.03), inner = stadium(0.0545, 0.0265)
+const wallShape = stadium(0.058, 0.03); wallShape.holes.push(inner)
+const HT = BY + BT + 0.0024 - F0
+cover.add(new THREE.Mesh(flat(wallShape, HT, F0), housingM))
+cover.add(new THREE.Mesh(flat(outer, 0.0011, F0 + HT, 0.0006), housingM))
+lab.add(cover, { name: 'Housing', explode: [0, 0.03, 0], xray: 'shell' })
+
+// ------------------------------------------------------------------ software on the hardware: packets and radio rings
+const pk = new SK.Packets(lab, { parent: boardG, size: 0.00034, max: 400 })
+const waves = new SK.Waves(lab, { parent: boardG, pos: [ANT[0], BT + 0.0011, 0], r1: 0.026, color: [0.45, 0.72, 1], dur: 1.1 })
+const path = (pts) => pcb.path(pts)
+const P_DRDY = path(route(0.002, 0.0032))
+const P_MISO = path(route(0.0004, 0.00064))
+const P_RF = path([[MCU[0] + 0.0032, 0.0008], [0.0115, 0.0008], [0.0135, 0], [ANT[0] - 0.0018, 0]])
+const P_FL = path([[MCU[0] - 0.0014, -0.0032], [FL[0] + 0.0036, FL[1] + 0.00025], [FL[0] + 0.0012, FL[1] + 0.00025]])
+
+// ------------------------------------------------------------------ the trace panel and the strip
+const C = { acq: [1, 0.62, 0.25], dsp: [0.3, 0.86, 0.74], cls: [0.68, 0.52, 1], str: [0.42, 0.66, 1], log: [0.72, 0.72, 0.7], isr: [0.95, 0.95, 0.92], rad: [0.42, 0.66, 1] }
+const trace = new SK.Trace(lab, {
+  title: 'FreeRTOS on the nRF52832', window: 0.03,
+  lanes: [
+    { id: 'ISR', label: 'ISRs', color: C.isr }, { id: 'Acquire', color: C.acq }, { id: 'DSP', color: C.dsp }, { id: 'Classifier', color: C.cls },
+    { id: 'Stream', color: C.str }, { id: 'Log', color: C.log }, { id: 'SPI', label: 'SPI bus', kind: 'bus', color: C.acq },
+    { id: 'Radio', kind: 'task', color: C.rad }, { id: 'I', label: 'Current', kind: 'analog', step: true, log: true, min: 0, max: 6, unit: 'mA', color: [0.95, 0.85, 0.4] },
+  ],
+})
+const strip = new SK.Strip(lab, { label: 'ECG lead I, as the phone receives it', window: 4, min: -0.45, max: 1.35 })
+
+// live model: the same firmware, slowed so a 4 ms sample period can be watched
+const SCALE = 0.05           // simulated seconds per second on screen (1:20)
+let live, curEv = [], level = { cpu: 0, radio: 0, flash: 0 }
+function startLive() {
+  const sim = new SK.Sim()
+  trace.clear(); curEv = []; level = { cpu: 0, radio: 0, flash: 0 }
+  const hook = {
+    seg(lane, t0, t1, kind, job) {
+      const name = lane === 'SoftDevice' || lane === 'DRDY' ? 'ISR' : lane
+      if (lane !== 'idle' && kind !== 'wait' && kind !== 'blocked') { curEv.push([t0, 'cpu', 1], [t1, 'cpu', -1]) }
+      if (lane === 'idle') return
+      if (kind === 'wait' && lane === 'Acquire') { trace.seg('SPI', t0, t1, { kind: 'bus', label: '9 B' }); return }
+      if (kind === 'wait' && lane === 'Log') { trace.seg('Log', t0, t1, { kind: 'wait' }); return }
+      trace.seg(name, t0, t1, { kind })
+    },
+    drdy() { pk.send(P_DRDY, { dur: 0.35, color: [0.95, 0.95, 0.92], size: 0.00022, trail: 2 }) },
+    spi() { pk.send(P_MISO, { dur: 0.5, color: C.acq }) },
+    drop(now) { trace.mark(now, 'sample lost', { bad: true, row: 1 }) },
+    radio(now, bytes, ev) {
+      trace.seg('Radio', now, now + ev.span, { kind: 'run', label: bytes ? `${ev.packets} × PDU` : '' })
+      curEv.push([now, 'radio', 1], [now + ev.span, 'radio', -1])
+      pk.send(P_RF, { dur: 0.35, color: C.rad, onArrive: () => waves.emit(bytes ? 1 : 0.4) })
+      ledM.emissiveIntensity = 2.2
+    },
+    flash(now) { curEv.push([now, 'flash', 1], [now + HW.flashProg, 'flash', -1]); pk.send(P_FL, { dur: 0.45, color: C.cls }) },
+  }
+  const fw = firmware(sim, params, hook)
+  live = { sim, fw, hook }
+}
+startLive()
+
+// ------------------------------------------------------------------ the numbers on screen
+lab.hero({ label: 'Battery life', unit: 'days', max: 40, digits: 1 })
+const sps = lab.slider({ id: 'sps', label: 'Sample rate', min: 125, max: 1000, value: 250, step: 125, unit: 'SPS', ends: ['125', '1,000'], onInput: (v) => retune() })
+const ci = lab.slider({ id: 'ci', label: 'Connection interval', min: 7.5, max: 100, value: 30, step: 1.25, unit: 'ms', digits: 1, ends: ['7.5 ms', '100 ms'], onInput: (v) => retune() })
+let tune = 0
+function retune() { clearTimeout(tune); tune = setTimeout(() => { params.sps = sps.value; params.ci = ci.value / 1000; R = analyse(); startLive(); show() }, 90) }
+function show() {
+  const bad = R.drops > 0.01
+  const uA = R.I * 1e6
+  lab.setHero(R.days, {
+    state: bad ? 'samples dropped' : R.load > 0.6 ? 'CPU bound' : 'streaming',
+    sub: bad
+      ? `<span class="bad">${fmt(R.drops * 60)} samples lost per minute</span> · Acquire blocked ${fmt(R.acqBlocked * 1e3, 1)} ms<br>CPU ${fmt(R.load * 100, 1)} % · ${fmt(uA)} µA average`
+      : `${fmt(uA)} µA average · CPU ${fmt(R.load * 100, 1)} %<br>radio ${fmt(R.share.radio * 100)} % · AFE ${fmt(R.share.afe * 100)} % · CPU ${fmt(R.share.cpu * 100)} % of the charge`,
+    bad,
+  })
+  strip.note = bad ? `${fmt(R.drops * 60)} lost / min` : `${fmt(params.sps)} SPS · ${fmt(R.perEvent)} B per event`
+  strip.bad = bad
+  trace.sub.textContent = `· live at 1:${fmt(1 / SCALE)} · worst sample latency ${fmt(R.lat * 1e6)} µs`
+}
+show()
+
+// labels with live values
+lab.label(nrf, 'nRF52832', { at: [0, 0.0009, -0.003], value: () => `Cortex-M4F · CPU ${fmt(R.load * 100, 1)} %` })
+lab.label(ads, 'ADS1292R', { at: [0, 0.0009, -0.0025], value: () => `2 ch · ${fmt(params.sps)} SPS · SPI 4 MHz` })
+lab.label(antenna, 'Chip antenna', { at: [0, 0.0011, 0], value: () => `LE 1M · every ${fmt(params.ci * 1000, 1)} ms` })
+lab.label(flash, 'NOR flash', { at: [0, 0.0006, 0.001], value: () => 'session log · 1 Hz' })
+lab.label(cell, 'CR2032', { at: [-0.0095, 0.0016, 0.004], value: () => `225 mAh · ${fmt(R.I * 1e6)} µA` })
+lab.label(x32m, '32 MHz crystal', { at: [0, 0.0005, 0], value: () => 'radio clock' })
+lab.label(snaps.children[0], 'RA electrode', { at: [0, 0.002, 0], value: () => 'snap, 4 mm' })
+
+// ------------------------------------------------------------------ the frame loop
+let ecgT = 0, nextLossAt = 0.6
+lab.onTick((sdt) => {
+  // the firmware, slowed
+  const s = live.sim
+  s.runUntil(s.now + sdt * SCALE); live.fw.os.sync()
+  // the current trace from the edges the scheduler and the radio produced
+  curEv.sort((a, b) => a[0] - b[0])
+  while (curEv.length && curEv[0][0] <= s.now) {
+    const [t, k, d] = curEv.shift(); level[k] = Math.max(0, level[k] + d)
+    const mA = (HW.Iafe + (level.cpu > 0 ? HW.Icpu : HW.Isleep) + (level.radio > 0 ? HW.Itx : 0) + (level.flash > 0 ? HW.Iflash : 0)) * 1e3
+    trace.sample('I', t, mA)
+  }
+  trace.now = s.now
+  ledM.emissiveIntensity = Math.max(0, ledM.emissiveIntensity - sdt * 6)
+  // the strip runs in real time: the waveform, with the gaps the solver says the firmware drops
+  const step = 1 / params.sps
+  ecgT += sdt
+  strip.now = ecgT
+  let t = strip._t ?? ecgT - 4
+  const lossPerSec = R.drops, lossBurst = lossPerSec > 0 ? Math.max(1, Math.round(lossPerSec)) : 0
+  for (; t < ecgT; t += Math.max(step, 1 / 500)) {
+    if (lossBurst && t >= nextLossAt && t < nextLossAt + lossBurst * step) { strip.gap(t); continue }
+    if (t >= nextLossAt + lossBurst * step) nextLossAt += 1
+    strip.push(t, SK.ecg(t, 72) + 0.015 * Math.sin(t * 2 * Math.PI * 0.3))
+  }
+  strip._t = t
+})
+
+// ------------------------------------------------------------------ break it, explain it, film it
+lab.breakIt({
+  label: 'Swap the mutex',
+  run(l) { params.lock = 'binary'; R = analyse(); startLive(); live.sim.at(0.002, () => live.fw.os.release('Log')); show() },
+  reset(l) { params.lock = 'mutex'; R = analyse(); startLive(); show() },
+})
+lab.how(
+  'The firmware is simulated as it runs: a fixed priority preemptive scheduler (the FreeRTOS rules) with the real tasks, interrupts, the ring buffer lock and the SPI and flash waits that free the core. Battery life comes from the charge each state draws over six simulated seconds, with nRF52832 and ADS1292R datasheet currents; the per event radio ramp, the flash program current and the cycle counts are estimates. Break it swaps the buffer mutex for a binary semaphore: no priority inheritance, so Acquire waits behind the Classifier and the AFE overwrites samples nobody read. The panel runs 1:20 so a 4 ms sample period can be seen; the numbers do not.',
+  ['load = Σ Cᵢ / Tᵢ   (measured by the scheduler)', 'R = C + B + Σ⌈R / Tⱼ⌉ Cⱼ   (response time)', 't_SPI = 9 B × 8 / 4 MHz + 1 µs', 't_PDU = (1 + 4 + 2 + 4 + 3 + n + 3) × 8 / 1 Mbit/s', 'Ī = Σ Iₛ tₛ / T,   life = 0.8 × 225 mAh / Ī'],
+)
+lab.autoFilm({ runBeat: 'It runs the real firmware schedule.', runSub: 'Every task, interrupt and radio event, timed.', breakBeat: 'Swap one lock.', breakSub: 'No priority inheritance, and the ECG has gaps.', sliderTo: 0.75 })
+lab.start()
+lab.toggle('xray', true)
+</script>
+</body>
+</html>
